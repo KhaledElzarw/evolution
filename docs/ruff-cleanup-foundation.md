@@ -36,3 +36,22 @@ Initial findings:
 
 Future branches should reduce `E501` incrementally in small, tested areas
 rather than auto-formatting the repository in one pass.
+
+## E501 Area Plan
+
+As of `chore/ruff-e501-area-plan`, Ruff reports 197 `E501` findings when run
+with `--select E501`.
+
+`E501` should remain ignored in CI until the findings are reduced to zero
+through small, area-specific branches. Mass formatting is intentionally avoided
+to keep diffs reviewable and reduce the risk of accidental runtime changes.
+
+Recommended cleanup order:
+
+1. Tests: lowest risk; wrap fixtures, assertions, and test data first.
+2. Pure helper modules: medium risk; preserve public data shapes.
+3. Migration and Baserow maintenance tools: medium risk; verify payloads.
+4. Dashboard routes/server rendering: medium-high risk; protect HTML/JS output.
+5. Engine, trading, and runtime control code: high risk; defer until covered by
+   characterization tests.
+6. Legacy/research scripts: defer unless the files are quarantined or excluded.
