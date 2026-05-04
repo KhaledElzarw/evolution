@@ -22,6 +22,7 @@ FORBIDDEN_SUFFIXES = (
 
 FORBIDDEN_PATH_PARTS = {
     "__pycache__",
+    "ai_agents",
     ".pytest_cache",
     ".venv",
 }

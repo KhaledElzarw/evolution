@@ -3,6 +3,7 @@
 !.env.example
 .venv/
 __pycache__/
+ai_agents/
 *.pyc
 *.bak
 *.bak_*
