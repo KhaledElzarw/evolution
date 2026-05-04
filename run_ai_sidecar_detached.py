@@ -10,6 +10,10 @@ PYTHON = str(BASE / '.venv' / 'bin' / 'python')
 SIDECAR = str(BASE / 'ai_sidecar.py')
 
 
+def get_python_executable() -> str:
+    return os.getenv("TRADEBOT_PYTHON") or PYTHON
+
+
 def _live_pids():
     try:
         out = subprocess.check_output(['pgrep', '-f', SIDECAR], text=True)
@@ -37,7 +41,7 @@ def start() -> int:
         return newest
     log = open(LOG_PATH, 'ab', buffering=0)
     proc = subprocess.Popen(
-        [PYTHON, SIDECAR],
+        [get_python_executable(), SIDECAR],
         cwd=str(BASE),
         stdin=subprocess.DEVNULL,
         stdout=log,

@@ -13,6 +13,10 @@ DASHBOARD = str(BASE / 'dashboard_server.py')
 PORT = 8844
 
 
+def get_python_executable() -> str:
+    return os.getenv("TRADEBOT_PYTHON") or PYTHON
+
+
 def _live_dashboard_pids():
     try:
         out = subprocess.check_output(['pgrep', '-f', DASHBOARD], text=True)
@@ -70,7 +74,7 @@ def _listening_pid_on_port() -> int | None:
 def _start_detached() -> int:
     with open(LOG_PATH, 'ab', buffering=0) as log:
         proc = subprocess.Popen(
-            [PYTHON, DASHBOARD],
+            [get_python_executable(), DASHBOARD],
             cwd=str(BASE),
             stdin=subprocess.DEVNULL,
             stdout=log,

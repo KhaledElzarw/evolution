@@ -12,6 +12,10 @@ PYTHON = str(BASE / '.venv' / 'bin' / 'python')
 ENGINE = str(BASE / 'engine.py')
 
 
+def get_python_executable() -> str:
+    return os.getenv("TRADEBOT_PYTHON") or PYTHON
+
+
 def _live_engine_pids():
     try:
         out = subprocess.check_output(['pgrep', '-f', ENGINE], text=True)
@@ -71,7 +75,7 @@ def _stop_pid(pid: int, timeout: float = 5.0) -> None:
 def _start_fresh_detached() -> int:
     log = open(LOG_PATH, 'ab', buffering=0)
     proc = subprocess.Popen(
-        [PYTHON, ENGINE],
+        [get_python_executable(), ENGINE],
         cwd=str(BASE),
         stdin=subprocess.DEVNULL,
         stdout=log,

@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 from pathlib import Path
 
@@ -12,9 +13,13 @@ SERVICES = {
 }
 
 
+def get_python_executable() -> str:
+    return os.getenv("TRADEBOT_PYTHON") or PYTHON
+
+
 def _run(service: str, command: str) -> str:
     result = subprocess.run(
-        [PYTHON, str(SERVICES[service]), command],
+        [get_python_executable(), str(SERVICES[service]), command],
         cwd=str(BASE_DIR),
         text=True,
         capture_output=True,
