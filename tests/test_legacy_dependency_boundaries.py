@@ -11,10 +11,13 @@ DEPRECATED_MODULES = {
     "advisor",
     "control_bot",
     "engine_trend",
+}
+REMOVED_LEGACY_MODULES = {
     "grid_engine_honest",
     "grid_engine_honest_v2",
 }
-DEPRECATED_SERVICE_MARKERS = tuple(sorted(DEPRECATED_MODULES))
+FORBIDDEN_LEGACY_MODULES = DEPRECATED_MODULES | REMOVED_LEGACY_MODULES
+FORBIDDEN_LEGACY_SERVICE_MARKERS = tuple(sorted(FORBIDDEN_LEGACY_MODULES))
 
 CORE_PYTHON_FILES = {
     "ai_sidecar.py",
@@ -32,7 +35,7 @@ CORE_PYTHON_FILES = {
 }
 
 
-def _deprecated_imports(path: Path) -> list[str]:
+def _forbidden_legacy_imports(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     offenders = []
 
@@ -40,13 +43,13 @@ def _deprecated_imports(path: Path) -> list[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 root = alias.name.split(".", 1)[0]
-                if root in DEPRECATED_MODULES:
+                if root in FORBIDDEN_LEGACY_MODULES:
                     offenders.append(
                         f"{path.relative_to(REPO_ROOT)}:{node.lineno} imports {alias.name}"
                     )
         elif isinstance(node, ast.ImportFrom) and node.module:
             root = node.module.split(".", 1)[0]
-            if root in DEPRECATED_MODULES:
+            if root in FORBIDDEN_LEGACY_MODULES:
                 offenders.append(
                     f"{path.relative_to(REPO_ROOT)}:{node.lineno} imports from {node.module}"
                 )
@@ -54,22 +57,22 @@ def _deprecated_imports(path: Path) -> list[str]:
     return offenders
 
 
-def test_core_python_modules_do_not_import_deprecated_modules():
+def test_core_python_modules_do_not_import_deprecated_or_removed_legacy_modules():
     offenders = []
 
     for relative_path in sorted(CORE_PYTHON_FILES):
-        offenders.extend(_deprecated_imports(REPO_ROOT / relative_path))
+        offenders.extend(_forbidden_legacy_imports(REPO_ROOT / relative_path))
 
-    assert offenders == [], "Deprecated imports found in core files: " + ", ".join(offenders)
+    assert offenders == [], "Forbidden legacy imports found in core files: " + ", ".join(offenders)
 
 
-def test_dashboard_orchestrator_services_do_not_reference_deprecated_workflows():
+def test_dashboard_orchestrator_services_do_not_reference_deprecated_or_removed_workflows():
     offenders = []
 
     for service, command in dashboard_orchestrator.SERVICES.items():
         service_text = f"{service} {Path(command).name}"
-        for marker in DEPRECATED_SERVICE_MARKERS:
+        for marker in FORBIDDEN_LEGACY_SERVICE_MARKERS:
             if marker in service_text:
                 offenders.append(f"{service}: {Path(command).name} references {marker}")
 
-    assert offenders == [], "Deprecated services referenced by orchestrator: " + ", ".join(offenders)
+    assert offenders == [], "Forbidden legacy services referenced by orchestrator: " + ", ".join(offenders)

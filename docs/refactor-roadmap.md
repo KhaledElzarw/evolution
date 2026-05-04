@@ -13,8 +13,8 @@ The repository now has a foundation for cautious modernization:
   security documentation are in place.
 - Generated dashboard intelligence and honest grid replay outputs are classified
   as runtime artifacts.
-- Legacy and research candidates are inventoried without moving or deleting
-  them.
+- Legacy and research candidates are inventoried, and deprecated honest replay
+  scripts have been removed.
 - Ruff `E` and `F` checks run in CI, with intentional suppressions documented
   for late-bound dashboard globals and late dashboard route imports.
 - Low-risk and audited unused imports were removed or marked intentional.
@@ -98,7 +98,7 @@ branch explicitly authorizes the work:
 - Dashboard mutation/control contract.
 - Telegram operator command behavior.
 - Runtime file paths.
-- Legacy/research script locations.
+- Remaining legacy/research script locations.
 - Migration tool behavior.
 - `src/` package layout.
 - CI enforcement thresholds.
@@ -185,10 +185,9 @@ Before moving legacy or research scripts:
 - Keep runtime archives and generated outputs out of Git.
 - Move files only in a dedicated branch with no logic changes.
 
-`engine_trend.py`, `advisor.py`, `grid_engine_honest.py`,
-`grid_engine_honest_v2.py`, and migration tools should remain in place until
-their ownership and expected behavior are confirmed. Legacy Baserow tooling has
-been removed.
+Deprecated honest replay scripts and legacy Baserow tooling have been removed.
+`engine_trend.py`, `advisor.py`, and migration tools should remain in place
+until their ownership and expected behavior are confirmed.
 
 ## Prerequisites Before `src/` Layout Migration
 

@@ -21,74 +21,57 @@ Candidate groups:
 
 ## grid_engine_honest.py
 
-Status: **Research/backtest replay script; quarantine candidate later; do-not-move-yet**
+Status: **Removed deprecated research/backtest replay script**
 
-1. Current path: `grid_engine_honest.py`
-2. Why suspicious: Root-level engine-like module with grid/accounting classes
+1. Former path: `grid_engine_honest.py`
+2. Why removed: Root-level engine-like module with grid/accounting classes
    and helper names that overlap with the main engine.
 3. Evidence of duplication or runtime/archive nature:
    - Defines `PaperAccount`, `GridOrder`, and `GridState`.
    - Defines helpers such as `_ema`, `_atr`, `_spacing_for_mode`,
      `_build_grid_orders`, and `_fill_order_paper`.
    - Similar concepts also exist in the main engine path.
-   - Generates `grid_honest_replay.json` and
-     `grid_honest_replay_equity.json`; these should remain ignored if produced.
+   - Generated `grid_honest_replay.json` and
+     `grid_honest_replay_equity.json`; these remain ignored as legacy local
+     outputs if old copies exist.
    - No supported README/OPERATIONS invocation found.
-   - Performs replay work at import time.
-   - Reads a hardcoded local feather data path.
-   - Writes replay outputs and prints a result.
-4. Risk if moved:
-   - May break manual backtesting, ad hoc operator workflows, or undocumented
-     scripts.
-   - May remove useful comparison behavior for historical strategy analysis.
-5. How to confirm usage:
-   - Run `rg "grid_engine_honest" .`.
-   - Check shell history, runbooks, README/OPERATIONS references, and open pull
-     requests.
-   - Ask the repository owner whether it is still used for local research.
-6. Proposed future action:
-   - If confirmed research-only, move later to a documented quarantine or
-     research area in a dedicated commit.
-   - If still useful, document its purpose and supported invocation.
-7. Required tests before moving:
+   - Performed replay work at import time.
+   - Read a hardcoded local feather data path.
+   - Wrote replay outputs and printed a result.
+4. Removal safety:
+   - No supported core imports or orchestrator services referenced the script.
+   - Removal does not touch engine strategy, order execution, dashboard, SQLite,
+     AI sidecar, or migration behavior.
+5. Required checks after removal:
    - Full pytest suite.
    - Compileall.
-   - Any existing or newly added characterization test that captures expected
-     grid/accounting output for a small fixture.
+   - Ruff.
 
 ## grid_engine_honest_v2.py
 
-Status: **Research/backtest replay script; quarantine candidate later; do-not-move-yet**
+Status: **Removed deprecated research/backtest replay script**
 
-1. Current path: `grid_engine_honest_v2.py`
-2. Why suspicious: Versioned root-level engine-like module suggests an
+1. Former path: `grid_engine_honest_v2.py`
+2. Why removed: Versioned root-level engine-like module suggests an
    experiment or replacement candidate.
 3. Evidence of duplication or runtime/archive nature:
    - Defines `PaperAccount`, `GridOrder`, and `GridState`.
    - Defines `_ema`, `_atr`, `_build_grid_orders`, and `_fill`.
    - Overlaps conceptually with `grid_engine_honest.py` and `engine.py`.
-   - Generates `grid_honest_replay_v2.json`; this should remain ignored if
-     produced.
+   - Generated `grid_honest_replay_v2.json`; this remains ignored as a legacy
+     local output if old copies exist.
    - No supported README/OPERATIONS invocation found.
-   - Performs replay work at import time.
-   - Reads a hardcoded local feather data path.
-   - Writes replay output and prints a result.
-4. Risk if moved:
-   - May break local experiments or comparison scripts.
-   - Versioned name may hide knowledge about why v2 exists.
-5. How to confirm usage:
-   - Run `rg "grid_engine_honest_v2|grid_engine_honest" .`.
-   - Compare with `grid_engine_honest.py` and `engine.py`.
-   - Ask maintainers whether v2 supersedes or documents a prior behavior.
-6. Proposed future action:
-   - Preserve in place until usage is confirmed.
-   - Later quarantine with notes or convert into documented test fixtures if it
-     is purely historical.
-7. Required tests before moving:
+   - Performed replay work at import time.
+   - Read a hardcoded local feather data path.
+   - Wrote replay output and printed a result.
+4. Removal safety:
+   - No supported core imports or orchestrator services referenced the script.
+   - Removal does not touch engine strategy, order execution, dashboard, SQLite,
+     AI sidecar, or migration behavior.
+5. Required checks after removal:
    - Full pytest suite.
    - Compileall.
-   - Characterization test for a representative v2 grid scenario if movement is
-     approved.
+   - Ruff.
 
 ## engine_trend.py
 
@@ -332,7 +315,7 @@ Status: **Classified as generated runtime cache.** See
 
 ## General Quarantine Criteria
 
-A future quarantine move should require:
+A future quarantine move for remaining legacy files should require:
 
 1. A clean working tree or intentional preservation branch/stash.
 2. Reference search results.
