@@ -1,6 +1,4 @@
 import json
-import hmac
-import base64
 import html as html_lib
 import hashlib
 import os
@@ -10,9 +8,8 @@ import threading
 from collections import deque
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 import re
 import xml.etree.ElementTree as ET
 
@@ -20,7 +17,7 @@ from bot import BinanceSpotREST
 from dashboard_contracts import (
     SCHEMA_VERSION as DASHBOARD_SCHEMA_VERSION,
     validate_chart_tick_payload,
-    validate_dashboard_payload,
+    validate_dashboard_payload,  # noqa: F401 - late-bound into dashboard_routes.Handler
     validate_market_payload,
 )
 from dashboard_data import DashboardDataAdapter

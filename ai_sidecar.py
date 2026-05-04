@@ -19,7 +19,6 @@ from ai_schemas import (
     utc_now,
 )
 from engine import (
-    AI_SIGNAL_PATH,
     LOG_PATH,
     RUNTIME_PATH,
     STATE_PATH,
