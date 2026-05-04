@@ -21,7 +21,7 @@ Candidate groups:
 
 ## grid_engine_honest.py
 
-Status: **Needs confirmation**
+Status: **Research/backtest replay script; quarantine candidate later; do-not-move-yet**
 
 1. Current path: `grid_engine_honest.py`
 2. Why suspicious: Root-level engine-like module with grid/accounting classes
@@ -33,6 +33,10 @@ Status: **Needs confirmation**
    - Similar concepts also exist in the main engine path.
    - Generates `grid_honest_replay.json` and
      `grid_honest_replay_equity.json`; these should remain ignored if produced.
+   - No supported README/OPERATIONS invocation found.
+   - Performs replay work at import time.
+   - Reads a hardcoded local feather data path.
+   - Writes replay outputs and prints a result.
 4. Risk if moved:
    - May break manual backtesting, ad hoc operator workflows, or undocumented
      scripts.
@@ -54,7 +58,7 @@ Status: **Needs confirmation**
 
 ## grid_engine_honest_v2.py
 
-Status: **Needs confirmation**
+Status: **Research/backtest replay script; quarantine candidate later; do-not-move-yet**
 
 1. Current path: `grid_engine_honest_v2.py`
 2. Why suspicious: Versioned root-level engine-like module suggests an
@@ -65,6 +69,10 @@ Status: **Needs confirmation**
    - Overlaps conceptually with `grid_engine_honest.py` and `engine.py`.
    - Generates `grid_honest_replay_v2.json`; this should remain ignored if
      produced.
+   - No supported README/OPERATIONS invocation found.
+   - Performs replay work at import time.
+   - Reads a hardcoded local feather data path.
+   - Writes replay output and prints a result.
 4. Risk if moved:
    - May break local experiments or comparison scripts.
    - Versioned name may hide knowledge about why v2 exists.
@@ -84,7 +92,7 @@ Status: **Needs confirmation**
 
 ## engine_trend.py
 
-Status: **Needs confirmation**
+Status: **Operator-facing legacy workflow; do-not-move-yet**
 
 1. Current path: `engine_trend.py`
 2. Why suspicious: Alternate engine entry point in the repository root.
@@ -94,6 +102,10 @@ Status: **Needs confirmation**
      `main`.
    - Writes or references trend-specific runtime artifacts such as
      `engine_trend.log`.
+   - Telegram control bot exposes TREND commands that read and write
+     trend-specific state/status/trade files.
+   - Importing the module loads local environment variables.
+   - Runtime execution is guarded by `main`.
 4. Risk if moved:
    - May break an alternate trend engine workflow.
    - May affect operators who still run the trend engine manually.
@@ -113,7 +125,7 @@ Status: **Needs confirmation**
 
 ## advisor.py
 
-Status: **Needs confirmation**
+Status: **Operator-facing legacy workflow; do-not-move-yet**
 
 1. Current path: `advisor.py`
 2. Why suspicious: Separate root-level process with deterministic advisor
@@ -123,6 +135,10 @@ Status: **Needs confirmation**
      `_advisor_full`, and `_fetch_market`.
    - Writes `advisor.log`.
    - Control text references an advisor choosing mode for `flexy`.
+   - Main engine still accepts `gridMode=flexy` and has a fallback when no
+     advisor process is active.
+   - Importing the module loads local environment variables.
+   - Runtime execution is guarded by `main`.
 4. Risk if moved:
    - May break a still-supported advisor workflow.
    - May break manual operator commands or expectations around `flexy`.
@@ -141,6 +157,34 @@ Status: **Needs confirmation**
    - Compileall.
    - Characterization tests around advisor state patching if still relevant.
    - Manual smoke check of any control command that references advisor behavior.
+
+## migrate_to_sqlite.py
+
+Status: **Active/manual migration tool; do-not-move-yet**
+
+1. Current path: `migrate_to_sqlite.py`
+2. Why inventoried: Root-level manual command that reads runtime JSON/JSONL
+   mirrors and writes the SQLite runtime store.
+3. Evidence of active/manual ownership:
+   - Documented in `OPERATIONS.md` as an optional/manual storage migration or
+     backfill command.
+   - Listed in `docs/architecture.md` as the migration/backfill entry point.
+   - Covered by `tests/test_migrate_to_sqlite.py`.
+   - Importing the module does not run migration; execution is guarded by
+     `main`.
+4. Risk if moved:
+   - Would break the documented operator command unless wrappers, docs, and
+     tests are updated together.
+5. Proposed future action:
+   - Keep in place until migration commands are intentionally reorganized.
+   - Preserve current command compatibility or provide an explicit replacement
+     before any move.
+6. Required tests before moving:
+   - Full pytest suite.
+   - Compileall.
+   - SQLite migration tests.
+   - Manual operator confirmation that documented migration/backfill commands
+     have been updated.
 
 ## Backup Files Matching `*.bak` or `*.bak_*`
 
