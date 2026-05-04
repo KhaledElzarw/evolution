@@ -5,7 +5,52 @@ import json
 import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
+
+if TYPE_CHECKING:
+    # Runtime values are late-bound by _bind_app_globals() to avoid the
+    # dashboard_server/dashboard_routes import cycle.
+    from dashboard_server import (
+        AI_ENDPOINTS,
+        CUM_PATH,
+        DASHBOARD_REFRESH_MS,
+        DASHBOARD_SCHEMA_VERSION,
+        DASHBOARD_TOKEN,
+        MAX_OHLCV_LIMIT,
+        REFRESH_MS,
+        RUNTIME_PATH,
+        SERVER_INSTANCE_ID,
+        STATE_PATH,
+        STATIC_DIR,
+        STATUS_PATH,
+        SUPPORTED_INTERVALS,
+        _sync_ai_sidecar_for_state,
+        ai_endpoint_payload,
+        apply_market_price_to_status,
+        apply_status_price_to_ohlcv,
+        build_chart_tick_payload,
+        build_event_patch,
+        build_market_payload,
+        build_order_patch,
+        coerce_state_patch,
+        datetime,
+        freshness_seconds,
+        get_intelligence,
+        get_ohlcv,
+        latest_ohlcv_price,
+        next_sequence,
+        normalize_interval,
+        read_events,
+        read_json,
+        render_initial_dashboard_html,
+        strip_orders_from_runtime,
+        timezone,
+        update_history,
+        update_state_locked,
+        validate_dashboard_payload,
+        validate_market_payload,
+    )
 
 
 def _bind_app_globals() -> None:
