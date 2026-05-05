@@ -405,6 +405,22 @@ def _runtime_snapshot_change_inputs(runtime_payload: dict) -> tuple[str, str, di
     return _stable_signature(critical), _stable_signature(market_window), market_values
 
 
+def _build_runtime_market_payload(kl: list, close: list[float], *, price: float, candle_hi: float, candle_lo: float) -> dict:
+    return {
+        "price": price,
+        "candle": {
+            "open": close[-2] if len(close) >= 2 else price,
+            "high": candle_hi,
+            "low": candle_lo,
+            "close": price,
+            "volumeBase": float(kl[-1][5]) if kl and len(kl[-1]) > 5 else 0.0,
+            "volumeUsdt": float(kl[-1][7]) if kl and len(kl[-1]) > 7 else 0.0,
+            "openTimeMs": int(kl[-1][0]) if kl and len(kl[-1]) > 0 else None,
+            "closeTimeMs": int(kl[-1][6]) if kl and len(kl[-1]) > 6 else None,
+        },
+    }
+
+
 def _maybe_write_runtime_state(gate: _SnapshotChangeGate, runtime_payload: dict, *, force: bool = False) -> tuple[bool, str]:
     critical_signature, market_signature, market_values = _runtime_snapshot_change_inputs(runtime_payload)
     decision = gate.evaluate(
@@ -1139,19 +1155,13 @@ def main():
                     "peak_equity": stats.peak_equity,
                     "cooldown_until": stats.cooldown_until.isoformat() if stats.cooldown_until else None,
                 },
-                "market": {
-                    "price": price,
-                    "candle": {
-                        "open": close[-2] if len(close) >= 2 else price,
-                        "high": candle_hi,
-                        "low": candle_lo,
-                        "close": price,
-                        "volumeBase": float(kl[-1][5]) if kl and len(kl[-1]) > 5 else 0.0,
-                        "volumeUsdt": float(kl[-1][7]) if kl and len(kl[-1]) > 7 else 0.0,
-                        "openTimeMs": int(kl[-1][0]) if kl and len(kl[-1]) > 0 else None,
-                        "closeTimeMs": int(kl[-1][6]) if kl and len(kl[-1]) > 6 else None,
-                    },
-                },
+                "market": _build_runtime_market_payload(
+                    kl,
+                    close,
+                    price=price,
+                    candle_hi=candle_hi,
+                    candle_lo=candle_lo,
+                ),
                 "grid": _serialize_grid(grid),
                 "ai": ai_signal,
                 "savedAt": _utc_now().isoformat(),
@@ -1307,19 +1317,13 @@ def main():
                         "peak_equity": stats.peak_equity,
                         "cooldown_until": stats.cooldown_until.isoformat() if stats.cooldown_until else None,
                     },
-                    "market": {
-                        "price": price,
-                        "candle": {
-                            "open": close[-2] if len(close) >= 2 else price,
-                            "high": candle_hi,
-                            "low": candle_lo,
-                            "close": price,
-                            "volumeBase": float(kl[-1][5]) if kl and len(kl[-1]) > 5 else 0.0,
-                            "volumeUsdt": float(kl[-1][7]) if kl and len(kl[-1]) > 7 else 0.0,
-                            "openTimeMs": int(kl[-1][0]) if kl and len(kl[-1]) > 0 else None,
-                            "closeTimeMs": int(kl[-1][6]) if kl and len(kl[-1]) > 6 else None,
-                        },
-                    },
+                    "market": _build_runtime_market_payload(
+                        kl,
+                        close,
+                        price=price,
+                        candle_hi=candle_hi,
+                        candle_lo=candle_lo,
+                    ),
                     "grid": _serialize_grid(grid),
                     "ai": ai_signal,
                     "savedAt": _utc_now().isoformat(),
@@ -1705,19 +1709,13 @@ def main():
                 "peak_equity": stats.peak_equity,
                 "cooldown_until": stats.cooldown_until.isoformat() if stats.cooldown_until else None,
             },
-            "market": {
-                "price": price,
-                "candle": {
-                    "open": close[-2] if len(close) >= 2 else price,
-                    "high": candle_hi,
-                    "low": candle_lo,
-                    "close": price,
-                    "volumeBase": float(kl[-1][5]) if kl and len(kl[-1]) > 5 else 0.0,
-                    "volumeUsdt": float(kl[-1][7]) if kl and len(kl[-1]) > 7 else 0.0,
-                    "openTimeMs": int(kl[-1][0]) if kl and len(kl[-1]) > 0 else None,
-                    "closeTimeMs": int(kl[-1][6]) if kl and len(kl[-1]) > 6 else None,
-                },
-            },
+            "market": _build_runtime_market_payload(
+                kl,
+                close,
+                price=price,
+                candle_hi=candle_hi,
+                candle_lo=candle_lo,
+            ),
             "grid": _serialize_grid(grid),
             "ai": ai_signal,
             "savedAt": _utc_now().isoformat(),

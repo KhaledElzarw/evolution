@@ -533,6 +533,48 @@ def test_snapshot_gate_persists_critical_changes_immediately_and_market_after_mi
     assert market_after_min.reason == "market_moved"
 
 
+def test_build_runtime_market_payload_preserves_full_candle_shape():
+    kl = [[111, "1", "2", "3", "4", "5.5", 222, "6.5"]]
+
+    payload = engine._build_runtime_market_payload(
+        kl,
+        [99.0, 100.0],
+        price=101.0,
+        candle_hi=103.0,
+        candle_lo=97.0,
+    )
+
+    assert payload == {
+        "price": 101.0,
+        "candle": {
+            "open": 99.0,
+            "high": 103.0,
+            "low": 97.0,
+            "close": 101.0,
+            "volumeBase": 5.5,
+            "volumeUsdt": 6.5,
+            "openTimeMs": 111,
+            "closeTimeMs": 222,
+        },
+    }
+
+
+def test_build_runtime_market_payload_uses_existing_sparse_fallbacks():
+    payload = engine._build_runtime_market_payload(
+        [[111]],
+        [100.0],
+        price=101.0,
+        candle_hi=103.0,
+        candle_lo=97.0,
+    )
+
+    assert payload["candle"]["open"] == 101.0
+    assert payload["candle"]["volumeBase"] == 0.0
+    assert payload["candle"]["volumeUsdt"] == 0.0
+    assert payload["candle"]["openTimeMs"] == 111
+    assert payload["candle"]["closeTimeMs"] is None
+
+
 def test_runtime_snapshot_signature_ignores_saved_at_but_keeps_grid_changes():
     runtime = {
         "enginePid": 123,
