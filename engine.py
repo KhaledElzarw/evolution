@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
-from bot import BinanceSpotREST
+from binance_client import BinanceSpotREST
 import sqlite_store
 
 

@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 
-from bot import BinanceSpotREST
+from binance_client import BinanceSpotREST
 from dashboard_contracts import (
     SCHEMA_VERSION as DASHBOARD_SCHEMA_VERSION,
     validate_chart_tick_payload,
