@@ -159,7 +159,7 @@ STATE_FIELD_BOUNDS = {
 }
 STATE_FIELD_CHOICES = {
     "aiEndpointKey": set(AI_ENDPOINT_BY_KEY.keys()),
-    "gridMode": {"scalpy", "fatty", "flexy"},
+    "gridMode": {"scalpy", "fatty"},
     "interval": set(SUPPORTED_INTERVALS.keys()),
     "mode": {"paper", "testnet-live"},
 }

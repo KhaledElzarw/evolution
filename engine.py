@@ -39,6 +39,7 @@ RUNTIME_SNAPSHOT_MAX_SECONDS = max(
 )
 RUNTIME_SNAPSHOT_MARKET_CHANGE_BPS = max(0.0, _env_float("TRADEBOT_RUNTIME_SNAPSHOT_MARKET_CHANGE_BPS", 5.0))
 HEARTBEAT_LOG_SECONDS = max(0.0, _env_float("TRADEBOT_ENGINE_HEARTBEAT_LOG_SECONDS", 1.0))
+SUPPORTED_GRID_MODES = {"scalpy", "fatty"}
 
 
 def _utc_now() -> datetime:
@@ -622,7 +623,7 @@ def _read_ai_decision_for_engine(state: dict) -> dict:
     signal["dryRun"] = _bool("dryRun", False)
     signal["shadowMode"] = _bool("shadowMode", False)
     mode = signal.get("recommendedMode")
-    if mode not in {"scalpy", "fatty"}:
+    if mode not in SUPPORTED_GRID_MODES:
         signal["recommendedMode"] = state.get("gridMode", "scalpy")
     return signal
 
@@ -732,19 +733,34 @@ def _day_key(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
-def _spacing_for_mode(mode: str, atr: float, price: float, *, min_scalpy: float, min_fatty: float) -> tuple[float, int]:
+def _grid_mode_error(mode: object) -> ValueError:
+    allowed = ", ".join(sorted(SUPPORTED_GRID_MODES))
+    return ValueError(f"unsupported gridMode {mode!r}; gridMode must be one of: {allowed}")
+
+
+def _resolve_grid_mode(state: dict, ai_signal: dict, ai_live: bool) -> str:
+    grid_mode = state.get("gridMode", "scalpy")
+    if grid_mode not in SUPPORTED_GRID_MODES:
+        raise _grid_mode_error(grid_mode)
+    if ai_live and ai_signal.get("recommendedMode") in SUPPORTED_GRID_MODES:
+        return str(ai_signal.get("recommendedMode"))
+    return str(grid_mode)
+
+
+def _spacing_for_mode(mode: str | None, atr: float, price: float, *, min_scalpy: float, min_fatty: float) -> tuple[float, int]:
     # Return (spacing_pct, levels)
     # NOTE: With 10bps fees, a full cycle (buy+sell) costs ~20bps, so spacing must be well above 0.20%.
     atr_pct = atr / price if price else 0.0
+    if mode == "scalpy":
+        spacing_pct = max(min_scalpy, 0.8 * atr_pct)
+        levels = 14
+        return spacing_pct, levels
     if mode == "fatty":
         spacing_pct = max(min_fatty, 1.4 * atr_pct)
         levels = 8
         return spacing_pct, levels
 
-    # scalpy default
-    spacing_pct = max(min_scalpy, 0.8 * atr_pct)
-    levels = 14
-    return spacing_pct, levels
+    raise _grid_mode_error(mode)
 
 
 def _build_grid_orders(anchor: float, spacing_pct: float, levels: int, qty_per_level: float) -> list[GridOrder]:
@@ -979,6 +995,67 @@ def main():
         ai_live = _ai_controls_active(ai_signal)
         ai_pause_new_buys = ai_live and (ai_signal.get("pauseNewBuys") or not ai_signal.get("gridAllowed", True))
         ai_sells_only = ai_live and (ai_signal.get("allowSellsOnly") or ai_signal.get("riskAction") in {"sells_only", "flatten"})
+        try:
+            grid_mode = _resolve_grid_mode(state, ai_signal, ai_live)
+        except ValueError as exc:
+            _log(f"GRID_CONFIG_INVALID {exc}")
+            event_rows = _load_trade_events()
+            entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
+            exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
+            has_open_position = paper.btc > 0
+            cum = _read_cum()
+            unreal = 0.0
+            unreal_pct = 0.0
+            if paper.btc > 0 and grid and grid.cost_basis_usdt > 0:
+                mkt_value = paper.btc * price
+                unreal = mkt_value - grid.cost_basis_usdt
+                avg_cost = grid.cost_basis_usdt / paper.btc if paper.btc else 0.0
+                unreal_pct = (price / avg_cost - 1.0) if avg_cost else 0.0
+            _write_status({
+                "tsUtc": _utc_now().isoformat(),
+                "mode": state.get("mode"),
+                "symbol": symbol,
+                "interval": interval,
+                "price": price,
+                "equityUsdt": paper.equity(price),
+                "usdt": paper.usdt,
+                "btc": paper.btc,
+                "position": None if paper.btc <= 0 else {
+                    "entryPrice": (grid.cost_basis_usdt / paper.btc) if (grid and paper.btc > 0) else None,
+                    "qtyBtc": paper.btc,
+                    "stop": float((grid.__dict__.get("trail_stop", 0.0) or 0.0)) if grid else None,
+                    "tp": None,
+                    "entryTimeUtc": grid.last_recenter_utc if grid else None,
+                    "unrealizedPnlUsdt": unreal,
+                    "unrealizedPnlPct": unreal_pct,
+                },
+                "stats": {
+                    "day": stats.day,
+                    "trades": int(cum.get("trades", stats.trades)),
+                    "closedTrades": int(cum.get("trades", stats.trades)),
+                    "entries": entries_count,
+                    "exits": exits_count,
+                    "hasOpenPosition": has_open_position,
+                    "wins": int(cum.get("wins", stats.wins)),
+                    "losses": int(cum.get("losses", stats.losses)),
+                    "pnlUsdt": float(cum.get("realizedPnlUsdt", stats.pnl_usdt)),
+                    "maxDrawdownPct": stats.max_drawdown_pct,
+                    "trendStrength": trend_strength,
+                    "grid": {
+                        "mode": state.get("gridMode"),
+                        "spacingPct": grid.spacing_pct if grid else None,
+                        "levels": grid.levels if grid else None,
+                        "openOrders": len(grid.orders) if grid else 0,
+                        "skipped": True,
+                        "skipReason": "unsupported_grid_mode",
+                        "error": str(exc),
+                    },
+                    "ai": ai_signal,
+                },
+                "lastEvent": "GRID_CONFIG_INVALID",
+            })
+            time.sleep(1)
+            continue
 
         inactive_reason = "paused" if state.get("paused") else None
         if inactive_reason is None and stats.cooldown_until and now < stats.cooldown_until:
@@ -1306,15 +1383,6 @@ def main():
                 _attach_ai_event_fields(exit_event, ai_signal)
                 _append_trade(exit_event)
                 _log(f"AI_FLATTEN decision={ai_signal.get('decisionId')} price={price:.2f} pnl={realized:.2f}")
-
-        # Determine mode parameters
-        grid_mode = state.get("gridMode", "scalpy")
-        if ai_live:
-            if ai_signal.get("recommendedMode") in {"scalpy", "fatty"}:
-                grid_mode = ai_signal.get("recommendedMode")
-        if grid_mode == "flexy":
-            # Placeholder: if still flexy and no advisor, choose based on ATR%
-            grid_mode = "scalpy" if (atr / price) < 0.01 else "fatty"
 
         # IMPORTANT: do NOT auto-reinitialize the grid on tiny ATR/spacing drift.
         # That was causing repeated re-buys and corrupt cost basis / unrealized PnL.

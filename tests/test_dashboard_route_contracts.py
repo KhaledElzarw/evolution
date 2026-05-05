@@ -245,3 +245,20 @@ def test_api_config_bad_payload_returns_current_500_error_contract(monkeypatch):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_api_config_flexy_grid_mode_returns_current_500_error_contract(monkeypatch):
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_TOKEN", "")
+    server = _start_server()
+    try:
+        try:
+            _request(server, "/api/config", method="POST", body={"gridMode": "flexy"})
+        except urllib.error.HTTPError as exc:
+            body = json.loads(exc.read().decode("utf-8"))
+            assert exc.code == 500
+            assert "gridMode must be one of" in body["error"]
+        else:
+            raise AssertionError("expected 500")
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -106,6 +106,15 @@ def test_coerce_state_patch_rejects_bad_choice():
         raise AssertionError("expected ValueError")
 
 
+def test_coerce_state_patch_rejects_flexy_grid_mode():
+    try:
+        dashboard_server.coerce_state_patch({"gridMode": "flexy"})
+    except ValueError as exc:
+        assert "gridMode must be one of" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
 def test_mutation_auth_allows_when_token_unset(monkeypatch):
     monkeypatch.setattr(dashboard_server, "DASHBOARD_TOKEN", "")
 

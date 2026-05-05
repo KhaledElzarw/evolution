@@ -16,7 +16,7 @@ def test_build_grid_orders_returns_empty_when_levels_are_zero():
     assert engine._build_grid_orders(anchor=100.0, spacing_pct=0.01, levels=0, qty_per_level=0.1) == []
 
 
-def test_spacing_for_mode_uses_minimums_and_atr_multipliers():
+def test_spacing_for_mode_accepts_scalpy():
     assert engine._spacing_for_mode(
         "scalpy",
         atr=1.0,
@@ -31,6 +31,9 @@ def test_spacing_for_mode_uses_minimums_and_atr_multipliers():
         min_scalpy=0.003,
         min_fatty=0.01,
     ) == (pytest.approx(0.008), 14)
+
+
+def test_spacing_for_mode_accepts_fatty():
     assert engine._spacing_for_mode(
         "fatty",
         atr=10.0,
@@ -38,6 +41,18 @@ def test_spacing_for_mode_uses_minimums_and_atr_multipliers():
         min_scalpy=0.003,
         min_fatty=0.01,
     ) == (pytest.approx(0.014), 8)
+
+
+@pytest.mark.parametrize("mode", ["flexy", "chaos", "", None])
+def test_spacing_for_mode_rejects_unsupported_modes(mode):
+    with pytest.raises(ValueError):
+        engine._spacing_for_mode(
+            mode,
+            atr=10.0,
+            price=1000.0,
+            min_scalpy=0.003,
+            min_fatty=0.01,
+        )
 
 
 def test_fill_order_paper_buy_accounts_for_fee_and_slippage():
