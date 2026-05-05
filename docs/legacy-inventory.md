@@ -15,7 +15,7 @@ Candidate groups:
 - Historical or experimental grid engines.
 - Removed Telegram control bot.
 - Removed trend-specific engine path.
-- Advisor process.
+- Removed advisor process and flexy grid mode.
 - Backup files matching `*.bak` or `*.bak_*`.
 - `accounting_archive_*` folders.
 - Runtime JSON/JSONL archives and mirrors.
@@ -123,38 +123,32 @@ Status: **Removed deprecated alternate engine workflow**
 
 ## advisor.py
 
-Status: **Operator-facing legacy workflow; do-not-move-yet**
+Status: **Removed deprecated advisor/flexy workflow**
 
-1. Current path: `advisor.py`
-2. Why suspicious: Separate root-level process with deterministic advisor
+1. Former path: `advisor.py`
+2. Why removed: Separate root-level process with deterministic advisor
    behavior and its own log path.
 3. Evidence of duplication or runtime/archive nature:
    - Defines market helpers such as `_ema`, `_atr`, `_advisor_light`,
      `_advisor_full`, and `_fetch_market`.
-   - Writes `advisor.log`.
-   - Control text references an advisor choosing mode for `flexy`.
-   - Main engine still accepts `gridMode=flexy` and has a fallback when no
-     advisor process is active.
-   - Importing the module loads local environment variables.
-   - Runtime execution is guarded by `main`.
-4. Risk if moved:
-   - May break a still-supported advisor workflow.
-   - May break manual operator commands or expectations around `flexy`.
-   - May obscure historical decision support behavior.
-5. How to confirm usage:
-   - Run `rg "advisor|advisorEnabled|advisor.log|flexy" .`.
-   - Confirm whether any operators still run `python advisor.py`.
-   - Check service wrappers, process managers, and local runbooks.
-6. Proposed future action:
-   - Keep in place until advisor usage is confirmed.
-   - If active, document ownership and invocation.
-   - If inactive, quarantine later with a clear note that behavior was not
-     deleted.
-7. Required tests before moving:
+   - Wrote `advisor.log`; old copies may still exist as ignored runtime
+     artifacts.
+   - Control text referenced an advisor choosing mode for `flexy`.
+   - Main engine previously accepted `gridMode=flexy`.
+   - Importing the module loaded local environment variables.
+   - Runtime execution was guarded by `main`.
+4. Removal status:
+   - Source file has been removed as a deprecated non-core workflow.
+   - No current service manager or core module should import or invoke it.
+   - `gridMode=flexy` is no longer supported; supported grid modes are
+     `scalpy` and `fatty`.
+   - Engine and dashboard validation fail closed for unsupported grid modes.
+   - Old `advisor.log` files remain ignored as legacy local artifacts.
+5. Required checks after removal:
    - Full pytest suite.
+   - Coverage run and report.
+   - Ruff.
    - Compileall.
-   - Characterization tests around advisor state patching if still relevant.
-   - Manual smoke check of any control command that references advisor behavior.
 
 ## migrate_to_sqlite.py
 

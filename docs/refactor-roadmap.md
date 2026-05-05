@@ -187,9 +187,9 @@ Before moving legacy or research scripts:
 - Move files only in a dedicated branch with no logic changes.
 
 Deprecated honest replay scripts, legacy Baserow tooling, the deprecated
-Telegram control bot, and the alternate trend engine have been removed.
-`advisor.py` and migration tools should remain in place until their ownership
-and expected behavior are confirmed.
+Telegram control bot, the alternate trend engine, and the advisor/flexy workflow
+have been removed. `migrate_to_sqlite.py` should remain in place until its
+ownership and expected behavior are confirmed.
 
 ## Prerequisites Before `src/` Layout Migration
 

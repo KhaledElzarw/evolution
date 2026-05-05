@@ -78,6 +78,7 @@ JSON and JSONL runtime mirrors are local artifacts. Current examples include:
 
 Legacy local artifacts from removed workflows also remain ignored:
 
+- `advisor.log` - legacy advisor/flexy workflow log
 - `grid_honest_replay*.json` - legacy generated honest replay outputs; ignored
   to avoid surfacing old local files after replay script removal
 - `state_trend.json` - legacy trend engine mirror

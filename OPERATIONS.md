@@ -53,6 +53,13 @@ python migrate_to_sqlite.py
 This command writes local runtime storage. Run it only when intentionally
 initializing, migrating, or backfilling the local SQLite store.
 
+### Supported grid modes
+
+The current engine supports only `scalpy` and `fatty`. If an old `state.json`
+or restored JSON mirror contains `"gridMode": "flexy"`, stop services, back up
+runtime state, change the local state to `scalpy` or `fatty`, and restart.
+Unsupported modes now fail closed through engine and dashboard validation.
+
 ### Dashboard
 
 The dashboard provides local visibility and selected control surfaces.
@@ -105,7 +112,7 @@ signal runtime state.
 
 ### Optional Telegram notifications
 
-Retained engine and advisor notification helpers can send Telegram messages
+Retained engine notification helpers can send Telegram messages
 when `TELEGRAM_CONTROL_BOT_TOKEN` and local runtime state provide a
 destination chat. The deprecated Telegram control bot service has been removed.
 Do not commit Telegram tokens, screenshots that reveal tokens, or exported chat
@@ -202,6 +209,7 @@ flows and recovery/migration workflows:
 Legacy local artifacts from removed workflows remain ignored so old runtime
 files do not become source changes:
 
+- `advisor.log`
 - `state_trend.json`
 - `engine_status_trend.json`
 - `cumulative_trend.json`
@@ -212,8 +220,8 @@ files do not become source changes:
 
 Logs are local runtime artifacts:
 
-- `advisor.log`
 - `engine.log`
+- `*.log`
 - `*.nohup.out`
 
 ### PID files
@@ -305,7 +313,7 @@ or paste file contents when the path may contain secrets or runtime state.
 - Confirm the local environment contains `TELEGRAM_CONTROL_BOT_TOKEN` only if
   notification delivery is expected.
 - Confirm network access to Telegram.
-- Review engine or advisor logs locally without printing token values.
+- Review engine logs locally without printing token values.
 - Rotate the bot token if it may have been exposed.
 
 ## Troubleshooting AI sidecar

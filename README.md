@@ -34,6 +34,9 @@ state, optional AI signal consumption, and status/event outputs. It is the
 highest-risk module because it is closest to strategy decisions and exchange
 interaction.
 
+Supported grid modes are `scalpy` and `fatty`; unsupported grid modes fail
+closed through engine and dashboard configuration validation.
+
 ### SQLite persistence
 
 `sqlite_store.py` provides the canonical local SQLite runtime store. JSON and
@@ -54,10 +57,10 @@ engine configuration explicitly consumes it.
 
 ### Optional Telegram notifications
 
-Retained engine and advisor notification helpers can send Telegram messages
+Retained engine notification helpers can send Telegram messages
 when `TELEGRAM_CONTROL_BOT_TOKEN` and local runtime state provide a
-destination chat. The deprecated Telegram control bot has been removed; broader
-notification cleanup is deferred to a later branch.
+destination chat. The deprecated Telegram control bot and advisor entry point
+have been removed; broader notification cleanup is deferred to a later branch.
 
 ## Requirements
 
