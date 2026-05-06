@@ -1,6 +1,7 @@
 import builtins
 import io
 import os
+import runpy
 import subprocess
 import sys
 
@@ -154,6 +155,20 @@ def test_wrapper_stop_pid_helpers_delegate_to_runner(monkeypatch):
     run_ai_sidecar_detached._stop_pid(30)
 
     assert calls == [(10, 1.0, True), (20, 2.0, True), (30, 5.0, False)]
+
+
+def test_wrapper_pid_alive_helpers_delegate_to_runner(monkeypatch):
+    calls = []
+
+    def fake_pid_alive(pid):
+        calls.append(pid)
+        return pid == 10
+
+    monkeypatch.setattr(run_engine_detached.wrapper_runner, "pid_alive", fake_pid_alive)
+
+    assert run_engine_detached._pid_alive(10) is True
+    assert run_dashboard_detached._pid_is_alive(20) is False
+    assert calls == [10, 20]
 
 
 def test_dashboard_listening_pid_on_port_parses_ss_output(monkeypatch):
@@ -318,6 +333,75 @@ def test_dashboard_main_log_reset_only_truncates_patched_log_path(monkeypatch, t
 
     assert log_path.read_text(encoding="utf-8") == ""
     assert capsys.readouterr().out == "log-reset\n"
+
+
+@pytest.mark.parametrize(
+    ("module", "argv0", "expected"),
+    [
+        (run_engine_detached, "run_engine_detached.py", "0\n"),
+        (run_dashboard_detached, "run_dashboard_detached.py", "0\n"),
+    ],
+)
+def test_engine_and_dashboard_entrypoints_can_report_empty_status(monkeypatch, capsys, module, argv0, expected):
+    def fake_check_output(args, **kwargs):
+        if args[0] == "ss":
+            raise OSError("ss unavailable")
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(module.subprocess, "check_output", fake_check_output)
+    monkeypatch.setattr(sys, "argv", [argv0, "status"])
+
+    runpy.run_path(module.__file__, run_name="__main__")
+
+    assert capsys.readouterr().out == expected
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("start", "202\n"),
+        ("stop", "stopped\n"),
+        ("restart", "202\n"),
+        ("status", "202\n"),
+    ],
+)
+def test_ai_sidecar_entrypoint_routes_commands_safely(monkeypatch, capsys, command, expected):
+    stopped = []
+    pid_writes = []
+    unlinked = []
+
+    def fake_check_output(args, text):
+        assert args == ["pgrep", "-f", run_ai_sidecar_detached.SIDECAR]
+        assert text is True
+        return "101\n202\n"
+
+    monkeypatch.setattr(run_ai_sidecar_detached.subprocess, "check_output", fake_check_output)
+    monkeypatch.setattr(run_ai_sidecar_detached.wrapper_runner, "stop_pid", lambda pid, **kwargs: stopped.append(pid))
+    monkeypatch.setattr(run_ai_sidecar_detached.wrapper_runner, "write_pid", lambda path, pid: pid_writes.append(pid))
+    monkeypatch.setattr(run_ai_sidecar_detached.wrapper_runner, "unlink_pid", lambda path: unlinked.append(path))
+    monkeypatch.setattr(
+        run_ai_sidecar_detached.wrapper_runner,
+        "start_detached",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("start_detached should not run")),
+    )
+    monkeypatch.setattr(sys, "argv", ["run_ai_sidecar_detached.py", command])
+
+    runpy.run_path(run_ai_sidecar_detached.__file__, run_name="__main__")
+
+    assert capsys.readouterr().out == expected
+    if command in {"start", "restart"}:
+        assert pid_writes[-1] == 202
+    if command in {"stop", "restart"}:
+        assert unlinked
+    if command != "status":
+        assert 101 in stopped
+
+
+def test_ai_sidecar_entrypoint_rejects_unknown_command(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["run_ai_sidecar_detached.py", "bogus"])
+
+    with pytest.raises(SystemExit, match="unknown command: bogus"):
+        runpy.run_path(run_ai_sidecar_detached.__file__, run_name="__main__")
 
 
 def test_wrapper_python_executable_defaults_to_venv(monkeypatch):

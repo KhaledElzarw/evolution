@@ -173,6 +173,12 @@ def test_update_lessons_from_trades_adds_only_new_ai_exit_lessons(
     }
 
 
+def test_read_trade_events_returns_empty_when_trade_log_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(ai_memory, "TRADES_PATH", tmp_path / "missing-trades.jsonl")
+
+    assert ai_memory._read_trade_events() == []
+
+
 def test_append_decision_writes_current_jsonl_envelope(monkeypatch, tmp_path):
     decisions_path = tmp_path / "ai_decisions.jsonl"
     monkeypatch.setattr(ai_memory, "AI_DECISIONS_PATH", decisions_path)

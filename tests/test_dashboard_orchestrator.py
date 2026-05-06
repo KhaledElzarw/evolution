@@ -1,3 +1,6 @@
+import runpy
+import sys
+
 import dashboard_orchestrator
 
 
@@ -139,3 +142,31 @@ def test_orchestrator_restart_stops_before_starting(monkeypatch):
         ("dashboard", "start"),
         ("ai", "start"),
     ]
+
+
+def test_orchestrator_entrypoint_prints_status_for_all_services(monkeypatch, capsys):
+    class Result:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake_run(args, **kwargs):
+        assert args[0] == dashboard_orchestrator.PYTHON
+        assert args[2] == "status"
+        assert kwargs == {
+            "cwd": str(dashboard_orchestrator.BASE_DIR),
+            "text": True,
+            "capture_output": True,
+            "check": True,
+        }
+        return Result(f"{args[1].rsplit('/', 1)[-1]}-pid\n")
+
+    monkeypatch.setattr(dashboard_orchestrator.subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "argv", ["dashboard_orchestrator.py", "status"])
+
+    runpy.run_path(dashboard_orchestrator.__file__, run_name="__main__")
+
+    assert capsys.readouterr().out == (
+        "engine: run_engine_detached.py-pid\n"
+        "dashboard: run_dashboard_detached.py-pid\n"
+        "ai: run_ai_sidecar_detached.py-pid\n"
+    )
