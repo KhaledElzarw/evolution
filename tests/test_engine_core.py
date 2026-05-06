@@ -429,6 +429,59 @@ def test_resolve_grid_mode_rejects_invalid_state_mode():
         engine._resolve_grid_mode({"gridMode": "flexy"}, {}, ai_live=False)
 
 
+def test_grid_telemetry_reports_effective_ai_mode_and_preserves_inputs():
+    payload = engine._grid_telemetry(
+        state={"gridMode": "scalpy"},
+        ai_signal={"recommendedMode": "fatty"},
+        effective_mode="fatty",
+        spacing_pct=0.012,
+        levels=8,
+        open_orders=4,
+    )
+
+    assert payload == {
+        "mode": "fatty",
+        "configuredMode": "scalpy",
+        "aiRecommendedMode": "fatty",
+        "spacingPct": 0.012,
+        "levels": 8,
+        "openOrders": 4,
+    }
+
+
+def test_grid_telemetry_configured_mode_can_ignore_ai_recommendation():
+    payload = engine._grid_telemetry(
+        state={"gridMode": "scalpy"},
+        ai_signal={"recommendedMode": "fatty"},
+        effective_mode="scalpy",
+        spacing_pct=0.006,
+        levels=14,
+        open_orders=0,
+    )
+
+    assert payload["mode"] == "scalpy"
+    assert payload["configuredMode"] == "scalpy"
+    assert payload["aiRecommendedMode"] == "fatty"
+
+
+def test_grid_telemetry_unsupported_raw_branch_uses_configured_mode():
+    payload = engine._grid_telemetry(
+        state={"gridMode": "flexy"},
+        ai_signal={"recommendedMode": "fatty"},
+        effective_mode=None,
+        skipped=True,
+        skipReason="unsupported_grid_mode",
+        error="unsupported gridMode 'flexy'",
+    )
+
+    assert payload["mode"] == "flexy"
+    assert payload["configuredMode"] == "flexy"
+    assert payload["aiRecommendedMode"] == "fatty"
+    assert payload["skipped"] is True
+    assert payload["skipReason"] == "unsupported_grid_mode"
+    assert payload["error"] == "unsupported gridMode 'flexy'"
+
+
 def test_attach_ai_event_fields_preserves_empty_and_adds_known_fields():
     event = {"event": "ENTER"}
 
