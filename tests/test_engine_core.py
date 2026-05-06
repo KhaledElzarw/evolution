@@ -203,6 +203,108 @@ def test_fill_order_paper_sell_allocates_cost_basis():
     assert round(grid.cost_basis_usdt, 4) == 60.0
 
 
+def test_select_crossed_grid_orders_buy_uses_candle_cross_not_latest_price():
+    order = engine.GridOrder(side="BUY", price=100.0, qty_btc=0.5)
+    paper = engine.PaperAccount(usdt=100.0, btc=0.0)
+
+    selected = engine._select_crossed_grid_orders(
+        [order],
+        candle_lo=99.0,
+        candle_hi=101.0,
+        price=98.0,
+        paper=paper,
+        ai_pause_new_buys=False,
+        fee_rate=0.001,
+    )
+
+    assert selected == [order]
+
+
+def test_select_crossed_grid_orders_sell_uses_candle_cross_not_latest_price():
+    order = engine.GridOrder(side="SELL", price=100.0, qty_btc=0.5)
+    paper = engine.PaperAccount(usdt=0.0, btc=0.5)
+
+    selected = engine._select_crossed_grid_orders(
+        [order],
+        candle_lo=99.0,
+        candle_hi=101.0,
+        price=102.0,
+        paper=paper,
+        ai_pause_new_buys=False,
+        fee_rate=0.001,
+    )
+
+    assert selected == [order]
+
+
+def test_select_crossed_grid_orders_blocks_buy_when_ai_pauses_new_buys():
+    order = engine.GridOrder(side="BUY", price=100.0, qty_btc=0.5)
+    paper = engine.PaperAccount(usdt=100.0, btc=0.0)
+
+    selected = engine._select_crossed_grid_orders(
+        [order],
+        candle_lo=99.0,
+        candle_hi=101.0,
+        price=100.0,
+        paper=paper,
+        ai_pause_new_buys=True,
+        fee_rate=0.001,
+    )
+
+    assert selected == []
+
+
+def test_select_crossed_grid_orders_blocks_buy_without_fee_coverage():
+    order = engine.GridOrder(side="BUY", price=100.0, qty_btc=1.0)
+    paper = engine.PaperAccount(usdt=100.0, btc=0.0)
+
+    selected = engine._select_crossed_grid_orders(
+        [order],
+        candle_lo=99.0,
+        candle_hi=101.0,
+        price=100.0,
+        paper=paper,
+        ai_pause_new_buys=False,
+        fee_rate=0.001,
+    )
+
+    assert selected == []
+
+
+def test_select_crossed_grid_orders_blocks_sell_without_btc_coverage():
+    order = engine.GridOrder(side="SELL", price=100.0, qty_btc=0.5)
+    paper = engine.PaperAccount(usdt=0.0, btc=0.25)
+
+    selected = engine._select_crossed_grid_orders(
+        [order],
+        candle_lo=99.0,
+        candle_hi=101.0,
+        price=100.0,
+        paper=paper,
+        ai_pause_new_buys=False,
+        fee_rate=0.001,
+    )
+
+    assert selected == []
+
+
+def test_select_crossed_grid_orders_skips_non_crossed_order():
+    order = engine.GridOrder(side="BUY", price=100.0, qty_btc=0.5)
+    paper = engine.PaperAccount(usdt=100.0, btc=0.0)
+
+    selected = engine._select_crossed_grid_orders(
+        [order],
+        candle_lo=101.0,
+        candle_hi=102.0,
+        price=100.0,
+        paper=paper,
+        ai_pause_new_buys=False,
+        fee_rate=0.001,
+    )
+
+    assert selected == []
+
+
 def test_env_required_numeric_and_date_helpers_cover_edge_paths(monkeypatch):
     monkeypatch.setenv("ENGINE_EDGE_FLOAT", "not-a-float")
     assert engine._env_float("ENGINE_EDGE_FLOAT", 1.25) == 1.25

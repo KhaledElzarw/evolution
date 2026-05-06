@@ -835,6 +835,38 @@ def _build_grid_orders(anchor: float, spacing_pct: float, levels: int, qty_per_l
     return buys + sells
 
 
+def _select_crossed_grid_orders(
+    orders: list[GridOrder],
+    *,
+    candle_lo: float,
+    candle_hi: float,
+    price: float,
+    paper: PaperAccount,
+    ai_pause_new_buys: bool,
+    fee_rate: float,
+) -> list[GridOrder]:
+    filled: list[GridOrder] = []
+    for o in orders:
+        # A limit order only fills if the candle traded through that price.
+        if not (candle_lo <= o.price <= candle_hi):
+            continue
+
+        if o.side == "BUY":
+            if ai_pause_new_buys:
+                continue
+            # Must have enough USDT to buy AND pay the fee.
+            est_total = o.qty_btc * o.price * (1 + fee_rate)
+            if est_total <= paper.usdt:
+                filled.append(o)
+
+        elif o.side == "SELL":
+            # Must actually have BTC to sell; otherwise we'd log fake 0-qty "fills".
+            if o.qty_btc > 0 and paper.btc >= o.qty_btc:
+                filled.append(o)
+
+    return filled
+
+
 def _fill_order_paper(
     paper: PaperAccount,
     grid: GridState,
@@ -1612,24 +1644,15 @@ def main():
         fee_rate = float(state.get("feeBps", 10)) / 10_000.0
         limit_slip_bps = float(state.get("paperLimitSlipBps", 3.0))
 
-        filled: list[GridOrder] = []
-        for o in grid.orders:
-            # A limit order only fills if the candle traded through that price.
-            if not (candle_lo <= o.price <= candle_hi):
-                continue
-
-            if o.side == "BUY":
-                if ai_pause_new_buys:
-                    continue
-                # Must have enough USDT to buy AND pay the fee.
-                est_total = o.qty_btc * o.price * (1 + fee_rate)
-                if est_total <= paper.usdt and o.price <= price:
-                    filled.append(o)
-
-            elif o.side == "SELL":
-                # Must actually have BTC to sell; otherwise we'd log fake 0-qty "fills".
-                if o.qty_btc > 0 and paper.btc >= o.qty_btc and o.price >= price:
-                    filled.append(o)
+        filled = _select_crossed_grid_orders(
+            grid.orders,
+            candle_lo=candle_lo,
+            candle_hi=candle_hi,
+            price=price,
+            paper=paper,
+            ai_pause_new_buys=ai_pause_new_buys,
+            fee_rate=fee_rate,
+        )
 
         for o in filled:
             if stats.trades >= int(state.get("maxTradesPerDay", 200)):
