@@ -409,7 +409,7 @@ def _build_runtime_market_payload(kl: list, close: list[float], *, price: float,
     return {
         "price": price,
         "candle": {
-            "open": close[-2] if len(close) >= 2 else price,
+            "open": float(kl[-1][1]) if kl and len(kl[-1]) > 1 else (close[-2] if len(close) >= 2 else price),
             "high": candle_hi,
             "low": candle_lo,
             "close": price,

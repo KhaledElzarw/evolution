@@ -805,11 +805,11 @@ def test_snapshot_gate_persists_critical_changes_immediately_and_market_after_mi
 
 
 def test_build_runtime_market_payload_preserves_full_candle_shape():
-    kl = [[111, "1", "2", "3", "4", "5.5", 222, "6.5"]]
+    kl = [[111, "100", "103", "97", "101", "5.5", 222, "6.5"]]
 
     payload = engine._build_runtime_market_payload(
         kl,
-        [99.0, 100.0],
+        [90.0, 101.0],
         price=101.0,
         candle_hi=103.0,
         candle_lo=97.0,
@@ -818,7 +818,7 @@ def test_build_runtime_market_payload_preserves_full_candle_shape():
     assert payload == {
         "price": 101.0,
         "candle": {
-            "open": 99.0,
+            "open": 100.0,
             "high": 103.0,
             "low": 97.0,
             "close": 101.0,
@@ -830,7 +830,23 @@ def test_build_runtime_market_payload_preserves_full_candle_shape():
     }
 
 
-def test_build_runtime_market_payload_uses_existing_sparse_fallbacks():
+def test_build_runtime_market_payload_falls_back_to_previous_close_without_kline_open():
+    payload = engine._build_runtime_market_payload(
+        [[111]],
+        [90.0, 101.0],
+        price=101.0,
+        candle_hi=103.0,
+        candle_lo=97.0,
+    )
+
+    assert payload["candle"]["open"] == 90.0
+    assert payload["candle"]["volumeBase"] == 0.0
+    assert payload["candle"]["volumeUsdt"] == 0.0
+    assert payload["candle"]["openTimeMs"] == 111
+    assert payload["candle"]["closeTimeMs"] is None
+
+
+def test_build_runtime_market_payload_uses_price_when_no_kline_open_or_previous_close():
     payload = engine._build_runtime_market_payload(
         [[111]],
         [100.0],
