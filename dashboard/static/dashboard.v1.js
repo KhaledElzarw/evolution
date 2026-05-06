@@ -712,37 +712,6 @@ function renderMacroCalendar() {
   `).join('');
 }
 
-function drawAllocation(usdt, btcValue, total) {
-  const canvas = document.getElementById('allocation-chart');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * devicePixelRatio;
-  canvas.height = rect.height * devicePixelRatio;
-  ctx.scale(devicePixelRatio, devicePixelRatio);
-  ctx.clearRect(0, 0, rect.width, rect.height);
-  const cx = rect.width / 2, cy = rect.height / 2, r = Math.min(rect.width, rect.height) * 0.30;
-  const frac = total > 0 ? usdt / total : 0;
-  const btcFrac = Math.max(0, 1 - frac);
-  ctx.lineWidth = 28;
-  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
-  ctx.strokeStyle = '#26a17b';
-  ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI/2, -Math.PI/2 + Math.PI * 2 * frac); ctx.stroke();
-  ctx.strokeStyle = '#f7931a';
-  ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI/2 + Math.PI * 2 * frac, -Math.PI/2 + Math.PI * 2); ctx.stroke();
-  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text');
-  ctx.font = '700 18px Inter, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(`${Math.round(frac * 100)}% USDT`, cx, cy - 6);
-  ctx.font = '600 14px Inter, sans-serif';
-  ctx.fillText(`${Math.round(btcFrac * 100)}% BTC`, cx, cy + 18);
-  document.getElementById('alloc-usdt').textContent = fmtMoney(usdt);
-  document.getElementById('alloc-usdt-pct').textContent = fmtPct(frac);
-  document.getElementById('alloc-btc').textContent = fmtMoney(btcValue);
-  document.getElementById('alloc-btc-pct').textContent = fmtPct(btcFrac);
-}
-
 function getVisibleOhlcv(allOhlcv) {
   const rows = allOhlcv || [];
   const limit = Math.max(30, Number(stateUi.candleLimit || DEFAULT_LIMITS[stateUi.timeframe] || 180));
