@@ -418,6 +418,53 @@ def test_ema_and_atr_cover_success_and_insufficient_data():
         engine._atr(high=[11.0, 13.0], low=[9.0, 10.0], close=[10.0, 12.0], period=2)
 
 
+def test_market_indicators_from_klines_coerces_kline_strings_and_matches_existing_formulas():
+    klines = []
+    for i in range(120):
+        close = 100.0 + i
+        klines.append([
+            1_700_000_000_000 + i,
+            f"{close - 0.5}",
+            f"{close + 1.5}",
+            f"{close - 2.0}",
+            f"{close}",
+            "1.0",
+            1_700_000_060_000 + i,
+            "100.0",
+        ])
+
+    market = engine._market_indicators_from_klines(klines)
+    close = [float(k[4]) for k in klines]
+    high = [float(k[2]) for k in klines]
+    low = [float(k[3]) for k in klines]
+    ema20 = engine._ema(close[-60:], period=20)
+    ema50 = engine._ema(close[-120:], period=50)
+
+    assert market["close"] == close
+    assert market["high"] == high
+    assert market["low"] == low
+    assert all(isinstance(value, float) for value in market["close"])
+    assert all(isinstance(value, float) for value in market["high"])
+    assert all(isinstance(value, float) for value in market["low"])
+    assert market["price"] == pytest.approx(close[-1])
+    assert market["candle_hi"] == pytest.approx(high[-1])
+    assert market["candle_lo"] == pytest.approx(low[-1])
+    assert market["atr"] == pytest.approx(engine._atr(high, low, close, period=14))
+    assert market["ema20"] == pytest.approx(ema20)
+    assert market["ema50"] == pytest.approx(ema50)
+    assert market["trend_strength"] == pytest.approx(abs(ema20 - ema50) / close[-1])
+
+
+def test_market_indicators_from_klines_preserves_short_data_error():
+    klines = [
+        [1, "100.0", "101.0", "99.0", "100.5"],
+        [2, "100.5", "102.0", "100.0", "101.0"],
+    ]
+
+    with pytest.raises(ValueError, match="Not enough data for ATR"):
+        engine._market_indicators_from_klines(klines)
+
+
 def test_resolve_grid_mode_uses_state_default_base_and_ai_override():
     assert engine._resolve_grid_mode({}, {}, ai_live=False) == "scalpy"
     assert engine._resolve_grid_mode({"gridMode": "fatty"}, {"recommendedMode": "scalpy"}, ai_live=False) == "fatty"

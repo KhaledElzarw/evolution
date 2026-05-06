@@ -687,6 +687,31 @@ def _atr(high: list[float], low: list[float], close: list[float], period: int = 
     return sum(window) / len(window)
 
 
+def _market_indicators_from_klines(kl: list) -> dict:
+    close = [float(k[4]) for k in kl]
+    high = [float(k[2]) for k in kl]
+    low = [float(k[3]) for k in kl]
+    price = close[-1]
+    candle_hi = high[-1]
+    candle_lo = low[-1]
+    atr = _atr(high, low, close, period=14)
+    ema20 = _ema(close[-60:], period=20)
+    ema50 = _ema(close[-120:], period=50)
+    trend_strength = abs(ema20 - ema50) / price
+    return {
+        "close": close,
+        "high": high,
+        "low": low,
+        "price": price,
+        "candle_hi": candle_hi,
+        "candle_lo": candle_lo,
+        "atr": atr,
+        "ema20": ema20,
+        "ema50": ema50,
+        "trend_strength": trend_strength,
+    }
+
+
 @dataclass
 class PaperAccount:
     usdt: float
@@ -1208,13 +1233,17 @@ def main():
         now = _utc_now()
 
         kl = md.klines(symbol=symbol, interval=interval, limit=210)
-        close = [float(k[4]) for k in kl]
-        high = [float(k[2]) for k in kl]
-        low = [float(k[3]) for k in kl]
-
-        price = close[-1]
-        candle_hi = high[-1]
-        candle_lo = low[-1]
+        market = _market_indicators_from_klines(kl)
+        close = market["close"]
+        high = market["high"]  # noqa: F841
+        low = market["low"]  # noqa: F841
+        price = market["price"]
+        candle_hi = market["candle_hi"]
+        candle_lo = market["candle_lo"]
+        atr = market["atr"]
+        ema20 = market["ema20"]  # noqa: F841
+        ema50 = market["ema50"]  # noqa: F841
+        trend_strength = market["trend_strength"]
 
         eq = paper.equity(price)
         stats = _roll_stats_if_new_day(stats, now, eq)
@@ -1234,10 +1263,6 @@ def main():
             time.sleep(1)
             continue
 
-        atr = _atr(high, low, close, period=14)
-        ema20 = _ema(close[-60:], period=20)
-        ema50 = _ema(close[-120:], period=50)
-        trend_strength = abs(ema20 - ema50) / price
         ai_signal = _read_ai_decision_for_engine(state)
         ai_live = _ai_controls_active(ai_signal)
         ai_pause_new_buys = ai_live and (ai_signal.get("pauseNewBuys") or not ai_signal.get("gridAllowed", True))
