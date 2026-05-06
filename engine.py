@@ -528,13 +528,6 @@ def _reconcile_accounting_from_trade_log(start_usdt: float, start_btc: float) ->
             continue
         fee = float(ev.get("feeUsdt") or 0.0)
 
-        if kind == "ENTER":
-            fees += fee
-            usdt -= (notional + fee)
-            btc += qty
-            open_cost_basis += (notional + fee)
-            continue
-
         if kind == "EXIT":
             if qty <= 0:
                 continue
