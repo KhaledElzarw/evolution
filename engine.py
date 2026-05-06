@@ -839,6 +839,32 @@ def _status_stats_payload(
     return payload
 
 
+def _status_payload(
+    *,
+    state: dict,
+    symbol: str,
+    interval: str,
+    price: float,
+    paper: PaperAccount,
+    position_payload: dict | None,
+    stats_payload: dict,
+    last_event: str,
+) -> dict:
+    return {
+        "tsUtc": _utc_now().isoformat(),
+        "mode": state.get("mode"),
+        "symbol": symbol,
+        "interval": interval,
+        "price": price,
+        "equityUsdt": paper.equity(price),
+        "usdt": paper.usdt,
+        "btc": paper.btc,
+        "position": position_payload,
+        "stats": stats_payload,
+        "lastEvent": last_event,
+    }
+
+
 def _position_payload(paper: PaperAccount, grid: GridState | None, price: float) -> dict | None:
     if paper.btc <= 0:
         return None
@@ -1193,17 +1219,14 @@ def main():
             exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
             has_open_position = paper.btc > 0
             cum = _read_cum()
-            _write_status({
-                "tsUtc": _utc_now().isoformat(),
-                "mode": state.get("mode"),
-                "symbol": symbol,
-                "interval": interval,
-                "price": price,
-                "equityUsdt": paper.equity(price),
-                "usdt": paper.usdt,
-                "btc": paper.btc,
-                "position": _position_payload(paper, grid, price),
-                "stats": _status_stats_payload(
+            _write_status(_status_payload(
+                state=state,
+                symbol=symbol,
+                interval=interval,
+                price=price,
+                paper=paper,
+                position_payload=_position_payload(paper, grid, price),
+                stats_payload=_status_stats_payload(
                     stats=stats,
                     cum=cum,
                     entries_count=entries_count,
@@ -1223,8 +1246,8 @@ def main():
                     ),
                     ai_signal=ai_signal,
                 ),
-                "lastEvent": "GRID_CONFIG_INVALID",
-            })
+                last_event="GRID_CONFIG_INVALID",
+            ))
             time.sleep(1)
             continue
 
@@ -1239,17 +1262,14 @@ def main():
             exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
             has_open_position = paper.btc > 0
             cum = _read_cum()
-            status_payload = {
-                "tsUtc": _utc_now().isoformat(),
-                "mode": state.get("mode"),
-                "symbol": symbol,
-                "interval": interval,
-                "price": price,
-                "equityUsdt": paper.equity(price),
-                "usdt": paper.usdt,
-                "btc": paper.btc,
-                "position": _position_payload(paper, grid, price),
-                "stats": _status_stats_payload(
+            status_payload = _status_payload(
+                state=state,
+                symbol=symbol,
+                interval=interval,
+                price=price,
+                paper=paper,
+                position_payload=_position_payload(paper, grid, price),
+                stats_payload=_status_stats_payload(
                     stats=stats,
                     cum=cum,
                     entries_count=entries_count,
@@ -1269,8 +1289,8 @@ def main():
                     ),
                     ai_signal=ai_signal,
                 ),
-                "lastEvent": "PAUSED" if inactive_reason == "paused" else "COOLDOWN",
-            }
+                last_event="PAUSED" if inactive_reason == "paused" else "COOLDOWN",
+            )
             _write_status(status_payload)
             runtime_payload = {
                 "enginePid": os.getpid(),
@@ -1402,17 +1422,14 @@ def main():
                 event_rows = _load_trade_events()
                 entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
                 exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
-                _write_status({
-                    "tsUtc": _utc_now().isoformat(),
-                    "mode": state.get("mode"),
-                    "symbol": symbol,
-                    "interval": interval,
-                    "price": price,
-                    "equityUsdt": paper.equity(price),
-                    "usdt": paper.usdt,
-                    "btc": paper.btc,
-                    "position": None,
-                    "stats": _status_stats_payload(
+                _write_status(_status_payload(
+                    state=state,
+                    symbol=symbol,
+                    interval=interval,
+                    price=price,
+                    paper=paper,
+                    position_payload=None,
+                    stats_payload=_status_stats_payload(
                         stats=stats,
                         cum=cum,
                         entries_count=entries_count,
@@ -1429,8 +1446,8 @@ def main():
                         ),
                         ai_signal=ai_signal,
                     ),
-                    "lastEvent": "EXIT",
-                })
+                    last_event="EXIT",
+                ))
                 _write_runtime_state({
                     "enginePid": os.getpid(),
                     "paper": {
@@ -1537,16 +1554,13 @@ def main():
         max_expo = grid_plan["max_expo"]
 
         if ai_pause_new_buys and (grid is None or not grid.active):
-            _write_status({
-                "tsUtc": _utc_now().isoformat(),
-                "mode": state.get("mode"),
-                "symbol": symbol,
-                "interval": interval,
-                "price": price,
-                "equityUsdt": paper.equity(price),
-                "usdt": paper.usdt,
-                "btc": paper.btc,
-                "position": None if paper.btc <= 0 else {
+            _write_status(_status_payload(
+                state=state,
+                symbol=symbol,
+                interval=interval,
+                price=price,
+                paper=paper,
+                position_payload=None if paper.btc <= 0 else {
                     "entryPrice": (grid.cost_basis_usdt / paper.btc) if (grid and paper.btc > 0) else None,
                     "qtyBtc": paper.btc,
                     "stop": float((grid.__dict__.get("trail_stop", 0.0) or 0.0)) if grid else None,
@@ -1555,7 +1569,7 @@ def main():
                     "unrealizedPnlUsdt": 0.0,
                     "unrealizedPnlPct": 0.0,
                 },
-                "stats": _status_stats_payload(
+                stats_payload=_status_stats_payload(
                     stats=stats,
                     trend_strength=trend_strength,
                     grid_payload=_grid_telemetry(
@@ -1570,8 +1584,8 @@ def main():
                     ),
                     ai_signal=ai_signal,
                 ),
-                "lastEvent": "AI_SKIP",
-            })
+                last_event="AI_SKIP",
+            ))
             time.sleep(1)
             continue
 
@@ -1589,17 +1603,14 @@ def main():
                 (2.0 * fee_rate) + float(state.get("gridTrailMinNetProfitPct", 0.0010)),
             )
             if spacing_pct < min_edge_spacing:
-                _write_status({
-                    "tsUtc": _utc_now().isoformat(),
-                    "mode": state.get("mode"),
-                    "symbol": symbol,
-                    "interval": interval,
-                    "price": price,
-                    "equityUsdt": paper.equity(price),
-                    "usdt": paper.usdt,
-                    "btc": paper.btc,
-                    "position": None,
-                    "stats": _status_stats_payload(
+                _write_status(_status_payload(
+                    state=state,
+                    symbol=symbol,
+                    interval=interval,
+                    price=price,
+                    paper=paper,
+                    position_payload=None,
+                    stats_payload=_status_stats_payload(
                         stats=stats,
                         trend_strength=trend_strength,
                         grid_payload=_grid_telemetry(
@@ -1615,8 +1626,8 @@ def main():
                         ),
                         ai_signal=ai_signal,
                     ),
-                    "lastEvent": "GRID_SKIP",
-                })
+                    last_event="GRID_SKIP",
+                ))
                 time.sleep(1)
                 continue
 
@@ -1758,17 +1769,14 @@ def main():
         exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
         has_open_position = paper.btc > 0
 
-        status_payload = {
-            "tsUtc": _utc_now().isoformat(),
-            "mode": state.get("mode"),
-            "symbol": symbol,
-            "interval": interval,
-            "price": price,
-            "equityUsdt": paper.equity(price),
-            "usdt": paper.usdt,
-            "btc": paper.btc,
-            "position": _position_payload(paper, grid, price),
-            "stats": _status_stats_payload(
+        status_payload = _status_payload(
+            state=state,
+            symbol=symbol,
+            interval=interval,
+            price=price,
+            paper=paper,
+            position_payload=_position_payload(paper, grid, price),
+            stats_payload=_status_stats_payload(
                 stats=stats,
                 entries_count=entries_count,
                 exits_count=exits_count,
@@ -1784,8 +1792,8 @@ def main():
                 ),
                 ai_signal=ai_signal,
             ),
-            "lastEvent": "TICK",
-        }
+            last_event="TICK",
+        )
         _write_status(status_payload)
 
         runtime_payload = {

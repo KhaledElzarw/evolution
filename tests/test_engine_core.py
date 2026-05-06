@@ -640,6 +640,62 @@ def test_status_stats_payload_omits_detail_counters_when_not_supplied():
     assert "hasOpenPosition" not in payload
 
 
+def test_status_payload_builds_top_level_status_envelope(monkeypatch):
+    fixed_now = datetime(2026, 5, 6, 12, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(engine, "_utc_now", lambda: fixed_now)
+    paper = engine.PaperAccount(usdt=1000.0, btc=0.25)
+    position_payload = {"qtyBtc": 0.25, "entryPrice": 40000.0}
+    stats_payload = {"day": "2026-05-06", "trades": 2}
+
+    payload = engine._status_payload(
+        state={"mode": "paper"},
+        symbol="BTCUSDT",
+        interval="15m",
+        price=41000.0,
+        paper=paper,
+        position_payload=position_payload,
+        stats_payload=stats_payload,
+        last_event="TICK",
+    )
+
+    assert payload == {
+        "tsUtc": "2026-05-06T12:30:00+00:00",
+        "mode": "paper",
+        "symbol": "BTCUSDT",
+        "interval": "15m",
+        "price": 41000.0,
+        "equityUsdt": 11250.0,
+        "usdt": 1000.0,
+        "btc": 0.25,
+        "position": position_payload,
+        "stats": stats_payload,
+        "lastEvent": "TICK",
+    }
+    assert payload["position"] is position_payload
+    assert payload["stats"] is stats_payload
+
+
+def test_status_payload_supports_none_position_and_preserves_last_event(monkeypatch):
+    fixed_now = datetime(2026, 5, 6, 12, 31, tzinfo=timezone.utc)
+    monkeypatch.setattr(engine, "_utc_now", lambda: fixed_now)
+    stats_payload = {"day": "2026-05-06", "grid": {"skipped": True}}
+
+    payload = engine._status_payload(
+        state={"mode": "paper"},
+        symbol="BTCUSDT",
+        interval="1m",
+        price=100.0,
+        paper=engine.PaperAccount(usdt=50.0, btc=0.0),
+        position_payload=None,
+        stats_payload=stats_payload,
+        last_event="GRID_SKIP",
+    )
+
+    assert payload["position"] is None
+    assert payload["stats"] is stats_payload
+    assert payload["lastEvent"] == "GRID_SKIP"
+
+
 def test_attach_ai_event_fields_preserves_empty_and_adds_known_fields():
     event = {"event": "ENTER"}
 
