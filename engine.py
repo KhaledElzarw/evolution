@@ -1905,8 +1905,11 @@ def _run_engine_tick(
             stats.trades += 1
             if pnl >= 0:
                 cum["wins"] = int(cum.get("wins", 0)) + 1
+                stats.wins += 1
             else:
                 cum["losses"] = int(cum.get("losses", 0)) + 1
+                stats.losses += 1
+        cum = _normalize_cumulative(cum)
         deps.write_cum(cum)
         stats.pnl_usdt = float(cum.get("realizedPnlUsdt", 0.0))
 
@@ -1934,6 +1937,7 @@ def _run_engine_tick(
         position_payload=_position_payload(paper, grid, price),
         stats_payload=_status_stats_payload(
             stats=stats,
+            cum=cum,
             entries_count=entries_count,
             exits_count=exits_count,
             has_open_position=has_open_position,
@@ -1968,6 +1972,7 @@ def _run_engine_tick(
         ),
         grid=grid,
         ai_signal=ai_signal,
+        cum=cum,
     )
     deps.maybe_write_runtime_state(runtime_snapshot_gate, runtime_payload)
 

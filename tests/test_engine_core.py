@@ -2895,6 +2895,9 @@ def test_run_engine_tick_sell_fill_records_exit_win_and_buy_replacement():
     assert cum_write["feesPaidUsdt"] == pytest.approx(0.01)
     assert cum_write["grossRealizedPnlUsdt"] == pytest.approx(5.0)
     assert result.stats.trades == 1
+    assert result.stats.wins == 1
+    assert result.stats.losses == 0
+    assert result.stats.pnl_usdt == pytest.approx(4.99)
 
     assert len(result.grid.orders) == 1
     replacement = result.grid.orders[0]
@@ -2902,7 +2905,15 @@ def test_run_engine_tick_sell_fill_records_exit_win_and_buy_replacement():
     assert replacement.price == pytest.approx(99.0)
     assert replacement.qty_btc == pytest.approx(0.1)
     assert len(calls["status_writes"]) == 1
+    status_stats = calls["status_writes"][0]["stats"]
+    assert status_stats["wins"] == 1
+    assert status_stats["losses"] == 0
+    assert status_stats["pnlUsdt"] == pytest.approx(4.99)
     assert len(calls["maybe_runtime_calls"]) == 1
+    runtime_stats = calls["maybe_runtime_calls"][0][1]["stats"]
+    assert runtime_stats["wins"] == 1
+    assert runtime_stats["losses"] == 0
+    assert runtime_stats["pnl_usdt"] == pytest.approx(4.99)
     assert calls["runtime_writes"] == []
     assert calls["state_writes"] == []
     assert calls["sleeps"] == [1]
@@ -2973,11 +2984,22 @@ def test_run_engine_tick_sell_fill_ai_sells_only_records_exit_loss_without_buy_r
     assert cum_write["wins"] == 0
     assert cum_write["losses"] == 1
     assert result.stats.trades == 1
+    assert result.stats.wins == 0
+    assert result.stats.losses == 1
+    assert result.stats.pnl_usdt == pytest.approx(-5.01)
 
     assert result.grid.orders == []
     assert not any(order.side == "BUY" for order in result.grid.orders)
     assert len(calls["status_writes"]) == 1
+    status_stats = calls["status_writes"][0]["stats"]
+    assert status_stats["wins"] == 0
+    assert status_stats["losses"] == 1
+    assert status_stats["pnlUsdt"] == pytest.approx(-5.01)
     assert len(calls["maybe_runtime_calls"]) == 1
+    runtime_stats = calls["maybe_runtime_calls"][0][1]["stats"]
+    assert runtime_stats["wins"] == 0
+    assert runtime_stats["losses"] == 1
+    assert runtime_stats["pnl_usdt"] == pytest.approx(-5.01)
     assert calls["runtime_writes"] == []
     assert calls["state_writes"] == []
     assert calls["sleeps"] == [1]
