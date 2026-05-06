@@ -749,6 +749,13 @@ def _day_key(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
+def _roll_stats_if_new_day(stats: Stats, now: datetime, equity: float) -> Stats:
+    day = _day_key(now)
+    if day == stats.day:
+        return stats
+    return Stats(day=day, peak_equity=equity)
+
+
 def _grid_mode_error(mode: object) -> ValueError:
     allowed = ", ".join(sorted(SUPPORTED_GRID_MODES))
     return ValueError(f"unsupported gridMode {mode!r}; gridMode must be one of: {allowed}")
@@ -1047,8 +1054,6 @@ def main():
         state = _read_json(STATE_PATH)
 
         now = _utc_now()
-        if _day_key(now) != stats.day:
-            stats = Stats(day=_day_key(now), peak_equity=stats.peak_equity)
 
         kl = md.klines(symbol=symbol, interval=interval, limit=210)
         close = [float(k[4]) for k in kl]
@@ -1060,6 +1065,7 @@ def main():
         candle_lo = low[-1]
 
         eq = paper.equity(price)
+        stats = _roll_stats_if_new_day(stats, now, eq)
         if stats.peak_equity <= 0:
             stats.peak_equity = eq
         if eq > stats.peak_equity:

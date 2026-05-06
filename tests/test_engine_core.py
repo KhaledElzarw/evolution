@@ -328,6 +328,46 @@ def test_env_required_numeric_and_date_helpers_cover_edge_paths(monkeypatch):
     assert engine._day_key(datetime(2026, 5, 5, 12, 30, tzinfo=timezone.utc)) == "2026-05-05"
 
 
+def test_roll_stats_if_new_day_resets_daily_peak_and_counters():
+    stats = engine.Stats(
+        day="2026-05-05",
+        trades=3,
+        wins=2,
+        losses=1,
+        pnl_usdt=25.0,
+        max_drawdown_pct=0.12,
+        peak_equity=12_000.0,
+        cooldown_until=datetime(2026, 5, 5, 23, 30, tzinfo=timezone.utc),
+    )
+
+    rolled = engine._roll_stats_if_new_day(
+        stats,
+        datetime(2026, 5, 6, 0, 1, tzinfo=timezone.utc),
+        equity=10_000.0,
+    )
+
+    assert rolled.day == "2026-05-06"
+    assert rolled.peak_equity == pytest.approx(10_000.0)
+    assert rolled.trades == 0
+    assert rolled.wins == 0
+    assert rolled.losses == 0
+    assert rolled.pnl_usdt == 0.0
+    assert rolled.max_drawdown_pct == 0.0
+    assert rolled.cooldown_until is None
+
+
+def test_roll_stats_if_new_day_keeps_same_day_stats():
+    stats = engine.Stats(day="2026-05-06", peak_equity=12_000.0, trades=3)
+
+    rolled = engine._roll_stats_if_new_day(
+        stats,
+        datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc),
+        equity=10_000.0,
+    )
+
+    assert rolled is stats
+
+
 def test_ema_and_atr_cover_success_and_insufficient_data():
     assert engine._ema([10.0, 12.0, 14.0], period=3) == pytest.approx(12.5)
 
