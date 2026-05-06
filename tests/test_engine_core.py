@@ -131,6 +131,23 @@ def _fake_engine_tick_deps(
     return deps, calls
 
 
+def _make_tick_trade_events_stateful(deps: engine._EngineTickDeps, calls: dict) -> list[dict]:
+    trade_events = []
+
+    def append_trade(event: dict) -> None:
+        event_copy = dict(event)
+        calls["trade_appends"].append(event_copy)
+        trade_events.append(event_copy)
+
+    def load_trade_events() -> list[dict]:
+        calls["trade_event_loads"].append(True)
+        return list(trade_events)
+
+    deps.append_trade = append_trade
+    deps.load_trade_events = load_trade_events
+    return trade_events
+
+
 def test_build_grid_orders_sorted_by_distance():
     orders = engine._build_grid_orders(anchor=100.0, spacing_pct=0.01, levels=2, qty_per_level=0.1)
 
@@ -2465,3 +2482,225 @@ def test_run_engine_tick_grid_init_records_initial_buy_builds_grid_and_writes_st
     assert calls["sleeps"] == [1]
     assert any(log.startswith("GRID_INIT ") for log in calls["logs"])
     assert any(log.startswith("HEARTBEAT price=100.00") for log in calls["logs"])
+
+
+def test_run_engine_tick_buy_fill_records_enter_fee_and_sell_replacement():
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    _make_tick_trade_events_stateful(deps, calls)
+    paper = engine.PaperAccount(usdt=1000.0, btc=0.0)
+    stats = engine.Stats(day="2026-05-06", peak_equity=1000.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=100.0,
+        reserved_btc=0.0,
+        cost_basis_usdt=0.0,
+        orders=[engine.GridOrder(side="BUY", price=100.0, qty_btc=0.1)],
+        active=True,
+    )
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "maxDailyLossPct": 0.50,
+            "gridTrailActive": False,
+            "feeBps": 10,
+            "paperLimitSlipBps": 0,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "TICK"
+    assert result.grid is grid
+    assert len(calls["trade_appends"]) == 1
+    trade_event = calls["trade_appends"][0]
+    assert trade_event["event"] == "ENTER"
+    assert trade_event["type"] == "PAPER_LIMIT"
+    assert trade_event["side"] == "BUY"
+    assert trade_event["qtyBtc"] == pytest.approx(0.1)
+    assert trade_event["price"] == pytest.approx(100.0)
+    assert trade_event["notionalUsdt"] == pytest.approx(10.0)
+    assert trade_event["feeUsdt"] == pytest.approx(0.01)
+
+    assert len(calls["cum_writes"]) == 1
+    cum_write = calls["cum_writes"][0]
+    assert cum_write["feesPaidUsdt"] == pytest.approx(0.01)
+    assert cum_write["trades"] == 0
+    assert cum_write["wins"] == 0
+    assert cum_write["losses"] == 0
+
+    assert len(result.grid.orders) == 1
+    replacement = result.grid.orders[0]
+    assert replacement.side == "SELL"
+    assert replacement.price == pytest.approx(101.0)
+    assert replacement.qty_btc == pytest.approx(0.1)
+    assert len(calls["status_writes"]) == 1
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["runtime_writes"] == []
+    assert calls["state_writes"] == []
+    assert calls["sleeps"] == [1]
+
+
+def test_run_engine_tick_sell_fill_records_exit_win_and_buy_replacement():
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    _make_tick_trade_events_stateful(deps, calls)
+    paper = engine.PaperAccount(usdt=0.0, btc=0.2)
+    stats = engine.Stats(day="2026-05-06", peak_equity=20.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=0.0,
+        reserved_btc=0.2,
+        cost_basis_usdt=10.0,
+        orders=[engine.GridOrder(side="SELL", price=100.0, qty_btc=0.1)],
+        active=True,
+    )
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "maxDailyLossPct": 0.99,
+            "gridTrailActive": False,
+            "feeBps": 10,
+            "paperLimitSlipBps": 0,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "TICK"
+    assert result.grid is grid
+    assert len(calls["trade_appends"]) == 1
+    trade_event = calls["trade_appends"][0]
+    assert trade_event["event"] == "EXIT"
+    assert trade_event["type"] == "PAPER_LIMIT"
+    assert trade_event["side"] == "SELL"
+    assert trade_event["qtyBtc"] == pytest.approx(0.1)
+    assert trade_event["price"] == pytest.approx(100.0)
+    assert trade_event["notionalUsdt"] == pytest.approx(10.0)
+    assert trade_event["feeUsdt"] == pytest.approx(0.01)
+    assert trade_event["realizedPnlUsdt"] > 0
+
+    assert len(calls["cum_writes"]) == 1
+    cum_write = calls["cum_writes"][0]
+    assert cum_write["trades"] == 1
+    assert cum_write["wins"] == 1
+    assert cum_write["losses"] == 0
+    assert cum_write["feesPaidUsdt"] == pytest.approx(0.01)
+    assert cum_write["grossRealizedPnlUsdt"] == pytest.approx(5.0)
+    assert result.stats.trades == 1
+
+    assert len(result.grid.orders) == 1
+    replacement = result.grid.orders[0]
+    assert replacement.side == "BUY"
+    assert replacement.price == pytest.approx(99.0)
+    assert replacement.qty_btc == pytest.approx(0.1)
+    assert len(calls["status_writes"]) == 1
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["runtime_writes"] == []
+    assert calls["state_writes"] == []
+    assert calls["sleeps"] == [1]
+
+
+def test_run_engine_tick_sell_fill_ai_sells_only_records_exit_loss_without_buy_replacement():
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={
+            "enabled": True,
+            "stale": False,
+            "dryRun": False,
+            "shadowMode": False,
+            "gridAllowed": True,
+            "allowSellsOnly": True,
+            "riskAction": "sells_only",
+            "recommendedMode": "scalpy",
+        },
+    )
+    _make_tick_trade_events_stateful(deps, calls)
+    paper = engine.PaperAccount(usdt=0.0, btc=0.2)
+    stats = engine.Stats(day="2026-05-06", peak_equity=20.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=0.0,
+        reserved_btc=0.2,
+        cost_basis_usdt=30.0,
+        orders=[engine.GridOrder(side="SELL", price=100.0, qty_btc=0.1)],
+        active=True,
+    )
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "aiEnabled": True,
+            "maxDailyLossPct": 0.99,
+            "gridTrailActive": False,
+            "feeBps": 10,
+            "paperLimitSlipBps": 0,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "TICK"
+    assert result.grid is grid
+    assert len(calls["trade_appends"]) == 1
+    trade_event = calls["trade_appends"][0]
+    assert trade_event["event"] == "EXIT"
+    assert trade_event["side"] == "SELL"
+    assert trade_event["realizedPnlUsdt"] < 0
+
+    assert len(calls["cum_writes"]) == 1
+    cum_write = calls["cum_writes"][0]
+    assert cum_write["trades"] == 1
+    assert cum_write["wins"] == 0
+    assert cum_write["losses"] == 1
+    assert result.stats.trades == 1
+
+    assert result.grid.orders == []
+    assert not any(order.side == "BUY" for order in result.grid.orders)
+    assert len(calls["status_writes"]) == 1
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["runtime_writes"] == []
+    assert calls["state_writes"] == []
+    assert calls["sleeps"] == [1]
