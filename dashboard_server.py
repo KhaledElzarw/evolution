@@ -1460,7 +1460,7 @@ def build_chart_tick_payload(qs: dict[str, list[str]]) -> dict:
 from dashboard_routes import Handler  # noqa: E402
 
 
-if __name__ == '__main__':
+if __name__ == '__main__':  # pragma: no cover - daemon server entrypoint
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f'Dashboard listening on http://{HOST}:{PORT}', flush=True)
     server.serve_forever()

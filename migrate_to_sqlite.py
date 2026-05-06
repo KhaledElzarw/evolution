@@ -79,5 +79,5 @@ def main() -> None:
     print(json.dumps({"ok": True, "db": str(sqlite_store.db_path() if args.db is None else Path(args.db)), **result}, indent=2, sort_keys=True))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - script entrypoint
     main()

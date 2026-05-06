@@ -1881,7 +1881,7 @@ def _run_engine_tick(
         # remove order
         try:
             grid.orders.remove(o)
-        except ValueError:
+        except ValueError:  # pragma: no cover - defensive against an unexpected order-list race
             continue
 
         # fill at order price
@@ -1979,7 +1979,7 @@ def _run_engine_tick(
     return _result("TICK")
 
 
-def main():
+def main():  # pragma: no cover - daemon bootstrap/loop is exercised through _run_engine_tick tests
     engine_pid, is_fresh_start = _acquire_engine_lock()
     base_url = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
     # Use real (prod) market data by default; testnet klines can be garbage (spike wicks).
@@ -2059,5 +2059,5 @@ def main():
         last_heartbeat_log_monotonic = result.last_heartbeat_log_monotonic
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - script entrypoint
     main()

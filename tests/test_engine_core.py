@@ -148,6 +148,110 @@ def _make_tick_trade_events_stateful(deps: engine._EngineTickDeps, calls: dict) 
     return trade_events
 
 
+def test_engine_tick_deps_routes_to_production_functions(monkeypatch):
+    calls = []
+    now = datetime(2026, 5, 6, 12, 30, tzinfo=timezone.utc)
+
+    class FakeMarketData:
+        def klines(self, *, symbol: str, interval: str, limit: int) -> list:
+            calls.append(("klines", symbol, interval, limit))
+            return [["kline"]]
+
+    def write_json(path, payload):
+        calls.append(("write_json", path, payload))
+
+    def read_cum():
+        calls.append(("read_cum",))
+        return {"cum": True}
+
+    def write_cum(payload):
+        calls.append(("write_cum", payload))
+
+    def load_trade_events():
+        calls.append(("load_trade_events",))
+        return [{"event": "ENTER"}]
+
+    def write_status(payload):
+        calls.append(("write_status", payload))
+
+    def write_runtime_state(payload):
+        calls.append(("write_runtime_state", payload))
+
+    def maybe_write_runtime_state(gate, payload):
+        calls.append(("maybe_write_runtime_state", gate, payload))
+        return True, "saved"
+
+    def append_trade(event):
+        calls.append(("append_trade", event))
+
+    def log(message):
+        calls.append(("log", message))
+
+    def sleep(seconds):
+        calls.append(("sleep", seconds))
+
+    def monotonic():
+        calls.append(("monotonic",))
+        return 42.0
+
+    def utc_now():
+        calls.append(("utc_now",))
+        return now
+
+    def read_ai_decision(state):
+        calls.append(("read_ai_decision", state))
+        return {"enabled": False}
+
+    monkeypatch.setattr(engine, "_write_json", write_json)
+    monkeypatch.setattr(engine, "_read_cum", read_cum)
+    monkeypatch.setattr(engine, "_write_cum", write_cum)
+    monkeypatch.setattr(engine, "_load_trade_events", load_trade_events)
+    monkeypatch.setattr(engine, "_write_status", write_status)
+    monkeypatch.setattr(engine, "_write_runtime_state", write_runtime_state)
+    monkeypatch.setattr(engine, "_maybe_write_runtime_state", maybe_write_runtime_state)
+    monkeypatch.setattr(engine, "_append_trade", append_trade)
+    monkeypatch.setattr(engine, "_log", log)
+    monkeypatch.setattr(engine.time, "sleep", sleep)
+    monkeypatch.setattr(engine.time, "monotonic", monotonic)
+    monkeypatch.setattr(engine, "_utc_now", utc_now)
+    monkeypatch.setattr(engine, "_read_ai_decision_for_engine", read_ai_decision)
+
+    deps = engine._engine_tick_deps(FakeMarketData())
+    gate = engine._SnapshotChangeGate(10, 60, 5)
+
+    assert deps.fetch_klines("ETHUSDT", "1m", 3) == [["kline"]]
+    deps.write_state({"mode": "paper"})
+    assert deps.read_cum() == {"cum": True}
+    deps.write_cum({"feesPaidUsdt": 1.0})
+    assert deps.load_trade_events() == [{"event": "ENTER"}]
+    deps.write_status({"ok": "status"})
+    deps.write_runtime_state({"ok": "runtime"})
+    assert deps.maybe_write_runtime_state(gate, {"ok": "maybe"}) == (True, "saved")
+    deps.append_trade({"event": "EXIT"})
+    deps.log("hello")
+    deps.sleep(1.5)
+    assert deps.monotonic() == 42.0
+    assert deps.utc_now() == now
+    assert deps.read_ai_decision({"aiEnabled": True}) == {"enabled": False}
+
+    assert calls == [
+        ("klines", "ETHUSDT", "1m", 3),
+        ("write_json", engine.STATE_PATH, {"mode": "paper"}),
+        ("read_cum",),
+        ("write_cum", {"feesPaidUsdt": 1.0}),
+        ("load_trade_events",),
+        ("write_status", {"ok": "status"}),
+        ("write_runtime_state", {"ok": "runtime"}),
+        ("maybe_write_runtime_state", gate, {"ok": "maybe"}),
+        ("append_trade", {"event": "EXIT"}),
+        ("log", "hello"),
+        ("sleep", 1.5),
+        ("monotonic",),
+        ("utc_now",),
+        ("read_ai_decision", {"aiEnabled": True}),
+    ]
+
+
 def test_build_grid_orders_sorted_by_distance():
     orders = engine._build_grid_orders(anchor=100.0, spacing_pct=0.01, levels=2, qty_per_level=0.1)
 
@@ -2482,6 +2586,179 @@ def test_run_engine_tick_grid_init_records_initial_buy_builds_grid_and_writes_st
     assert calls["sleeps"] == [1]
     assert any(log.startswith("GRID_INIT ") for log in calls["logs"])
     assert any(log.startswith("HEARTBEAT price=100.00") for log in calls["logs"])
+
+
+def test_run_engine_tick_grid_init_caps_initial_buy_to_available_usdt(monkeypatch):
+    monkeypatch.setattr(engine, "_spacing_fee_floor_decision", lambda state, spacing_pct: (False, 0.0))
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    _make_tick_trade_events_stateful(deps, calls)
+    paper = engine.PaperAccount(usdt=10.0, btc=0.0)
+    stats = engine.Stats(day="2026-05-06", peak_equity=10.0)
+    cum = _engine_test_cum()
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "maxDailyLossPct": 0.99,
+            "gridTrailActive": False,
+            "feeBps": 20_000,
+            "paperMarketSlipBps": 0,
+            "gridMaxExposurePct": 1.0,
+            "gridMinPerLevelUsdt": 1.0,
+        },
+        paper=paper,
+        stats=stats,
+        grid=None,
+        cum=cum,
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    expected_notional = 10.0 / 3.0
+    expected_fee = expected_notional * 2.0
+
+    assert result.last_event == "TICK"
+    assert result.grid is not None
+    assert result.grid.active is True
+    assert result.paper.usdt == pytest.approx(0.0)
+    assert result.paper.btc == pytest.approx(expected_notional / 100.0)
+    assert result.grid.reserved_usdt == pytest.approx(10.0 - expected_notional)
+    assert result.grid.reserved_btc == pytest.approx(expected_notional / 100.0)
+    assert result.grid.cost_basis_usdt == pytest.approx(10.0)
+
+    assert len(calls["trade_appends"]) == 2
+    enter_event = calls["trade_appends"][0]
+    assert enter_event["event"] == "ENTER"
+    assert enter_event["reason"] == "GRID_INIT"
+    assert enter_event["notionalUsdt"] == pytest.approx(expected_notional)
+    assert enter_event["feeUsdt"] == pytest.approx(expected_fee)
+    assert enter_event["qtyBtc"] == pytest.approx(expected_notional / 100.0)
+
+    assert len(calls["status_writes"]) == 1
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["runtime_writes"] == []
+    assert calls["sleeps"] == [1]
+
+
+def test_run_engine_tick_respects_max_trades_per_day_cap():
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    order = engine.GridOrder(side="BUY", price=100.0, qty_btc=0.1)
+    paper = engine.PaperAccount(usdt=1000.0, btc=0.0)
+    stats = engine.Stats(day="2026-05-06", trades=1, peak_equity=1000.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=100.0,
+        reserved_btc=0.0,
+        cost_basis_usdt=0.0,
+        orders=[order],
+        active=True,
+    )
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "maxDailyLossPct": 0.99,
+            "maxTradesPerDay": 1,
+            "gridTrailActive": False,
+            "feeBps": 10,
+            "paperLimitSlipBps": 0,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "TICK"
+    assert result.grid is grid
+    assert result.grid.orders == [order]
+    assert calls["trade_appends"] == []
+    assert calls["cum_writes"] == []
+    assert len(calls["status_writes"]) == 1
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["runtime_writes"] == []
+    assert calls["sleeps"] == [1]
+
+
+def test_run_engine_tick_restores_order_when_fill_returns_none(monkeypatch):
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    order = engine.GridOrder(side="BUY", price=100.0, qty_btc=0.1)
+    fill_calls = []
+
+    def fail_fill(paper_arg, grid_arg, order_arg, *, fill_price, fee_bps, slip_bps=0.0):
+        fill_calls.append((paper_arg, grid_arg, order_arg, fill_price, fee_bps, slip_bps))
+        return None
+
+    monkeypatch.setattr(engine, "_fill_order_paper", fail_fill)
+    paper = engine.PaperAccount(usdt=1000.0, btc=0.0)
+    stats = engine.Stats(day="2026-05-06", peak_equity=1000.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=100.0,
+        reserved_btc=0.0,
+        cost_basis_usdt=0.0,
+        orders=[order],
+        active=True,
+    )
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "maxDailyLossPct": 0.99,
+            "gridTrailActive": False,
+            "feeBps": 10,
+            "paperLimitSlipBps": 0,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "TICK"
+    assert result.grid is grid
+    assert result.grid.orders == [order]
+    assert fill_calls == [(paper, grid, order, 100.0, 10.0, 0.0)]
+    assert calls["trade_appends"] == []
+    assert calls["cum_writes"] == []
+    assert len(calls["status_writes"]) == 1
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["runtime_writes"] == []
+    assert calls["sleeps"] == [1]
 
 
 def test_run_engine_tick_buy_fill_records_enter_fee_and_sell_replacement():

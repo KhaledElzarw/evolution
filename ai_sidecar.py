@@ -584,5 +584,5 @@ def main() -> None:
         time.sleep(poll_s)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - script entrypoint
     main()

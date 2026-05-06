@@ -21,6 +21,10 @@ class _StopSidecarLoop(Exception):
         self.seconds = seconds
 
 
+class _StopAfterContinue(Exception):
+    pass
+
+
 def _minimal_payload():
     return {
         "symbol": "BTCUSDT",
@@ -656,6 +660,76 @@ def test_main_no_payload_logs_and_sleeps_without_signal_write(monkeypatch):
         ai_sidecar.main()
 
     assert exc.value.seconds == 2
+    assert logs == ["BOOT", "NO_PAYLOAD"]
+    assert written == []
+
+
+def test_main_disabled_loop_continue_restarts_state_read(monkeypatch):
+    logs = []
+    written = []
+    sleeps = []
+    state_reads = 0
+
+    def fake_read_json(path):
+        nonlocal state_reads
+        if path == ai_sidecar.STATE_PATH:
+            state_reads += 1
+            if state_reads == 1:
+                return {"aiEnabled": False}
+            raise _StopAfterContinue
+        raise AssertionError(f"unexpected read: {path}")
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("sys.argv", ["ai_sidecar.py"])
+    monkeypatch.setattr(ai_sidecar, "_read_json", fake_read_json)
+    monkeypatch.setattr(ai_sidecar, "_log", logs.append)
+    monkeypatch.setattr(ai_sidecar, "_write_ai_signal", written.append)
+    monkeypatch.setattr(ai_sidecar.time, "sleep", fake_sleep)
+
+    with pytest.raises(_StopAfterContinue):
+        ai_sidecar.main()
+
+    assert state_reads == 2
+    assert sleeps == [2]
+    assert logs == ["BOOT", "DISABLED"]
+    assert written[0]["enabled"] is False
+    assert written[0]["source"] == "disabled"
+
+
+def test_main_no_payload_loop_continue_restarts_state_read(monkeypatch):
+    logs = []
+    written = []
+    sleeps = []
+    state_reads = 0
+
+    def fake_read_json(path):
+        nonlocal state_reads
+        if path == ai_sidecar.STATE_PATH:
+            state_reads += 1
+            if state_reads == 1:
+                return {"aiEnabled": True}
+            raise _StopAfterContinue
+        if path == ai_sidecar.RUNTIME_PATH:
+            return {}
+        raise AssertionError(f"unexpected read: {path}")
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("sys.argv", ["ai_sidecar.py"])
+    monkeypatch.setattr(ai_sidecar, "_read_json", fake_read_json)
+    monkeypatch.setattr(ai_sidecar, "_build_payload", lambda state, runtime: None)
+    monkeypatch.setattr(ai_sidecar, "_log", logs.append)
+    monkeypatch.setattr(ai_sidecar, "_write_ai_signal", written.append)
+    monkeypatch.setattr(ai_sidecar.time, "sleep", fake_sleep)
+
+    with pytest.raises(_StopAfterContinue):
+        ai_sidecar.main()
+
+    assert state_reads == 2
+    assert sleeps == [2]
     assert logs == ["BOOT", "NO_PAYLOAD"]
     assert written == []
 
