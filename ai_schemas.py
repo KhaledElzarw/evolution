@@ -189,12 +189,14 @@ def decision_from_parsed(
     confidence = clamp(pm.confidence, 0.0, 1.0)
     spacing = clamp(pm.recommended_spacing_pct, 0.003, 0.03)
     levels = int(clamp(pm.recommended_levels, 4, 24))
-    max_exposure = clamp(min(pm.recommended_max_exposure_pct, pm.risk_budget_pct), 0.05, 0.60)
     action = pm.risk_action
 
     # Low-confidence local models may tune spacing, but cannot force a risk-off action.
     if confidence < min_conf and action in {"pause_new_buys", "sells_only", "reduce_exposure", "flatten"}:
         action = "allow_grid"
+
+    min_exposure = 0.0 if action in {"reduce_exposure", "flatten"} else 0.05
+    max_exposure = clamp(min(pm.recommended_max_exposure_pct, pm.risk_budget_pct), min_exposure, 0.60)
 
     pause_new_buys = bool(pm.pause_new_buys or action in {"pause_new_buys", "sells_only", "reduce_exposure", "flatten"})
     allow_sells_only = bool(pm.allow_sells_only or action in {"sells_only", "reduce_exposure", "flatten"})

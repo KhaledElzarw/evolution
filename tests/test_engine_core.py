@@ -117,6 +117,39 @@ def test_compute_grid_plan_ai_reduce_exposure_limits_max_exposure_to_risk_budget
     assert plan["max_expo"] == pytest.approx(0.15)
 
 
+def test_compute_grid_plan_ai_reduce_exposure_preserves_zero_risk_budget():
+    plan = engine._compute_grid_plan(
+        {"gridMaxExposurePct": 0.50},
+        {
+            "recommendedMaxExposurePct": 0.40,
+            "reduceExposure": True,
+            "riskBudgetPct": 0.0,
+        },
+        True,
+        grid_mode="scalpy",
+        atr=1.0,
+        price=1000.0,
+    )
+
+    assert plan["max_expo"] == pytest.approx(0.0)
+
+
+def test_compute_grid_plan_ai_ignores_zero_risk_budget_without_reduce_exposure():
+    plan = engine._compute_grid_plan(
+        {"gridMaxExposurePct": 0.50},
+        {
+            "recommendedMaxExposurePct": 0.40,
+            "riskBudgetPct": 0.0,
+        },
+        True,
+        grid_mode="scalpy",
+        atr=1.0,
+        price=1000.0,
+    )
+
+    assert plan["max_expo"] == pytest.approx(0.40)
+
+
 @pytest.mark.parametrize(
     ("min_scalpy", "expected_spacing"),
     [(0.012, 0.006), (0.004, 0.003)],

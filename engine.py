@@ -815,9 +815,11 @@ def _compute_grid_plan(
     if ai_live:
         max_expo = _clamp(float(ai_signal.get("recommendedMaxExposurePct", max_expo) or max_expo), 0.05, 0.60)
         if ai_signal.get("reduceExposure"):
+            risk_budget_pct = ai_signal.get("riskBudgetPct")
+            risk_budget_pct = max_expo if risk_budget_pct is None else float(risk_budget_pct)
             max_expo = min(
                 max_expo,
-                _clamp(float(ai_signal.get("riskBudgetPct", max_expo) or max_expo), 0.0, 0.60),
+                _clamp(risk_budget_pct, 0.0, 0.60),
             )
 
     return {

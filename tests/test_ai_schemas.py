@@ -1,6 +1,28 @@
 import ai_schemas
 
 
+def _decision(parsed, state=None):
+    return ai_schemas.decision_from_parsed(
+        state={"aiMinConfidence": 0.55, "gridMaxExposurePct": 0.35} | (state or {}),
+        payload={
+            "symbol": "BTCUSDT",
+            "interval": "1m",
+            "price": 100.0,
+            "atrPct": 0.001,
+            "trendStrength": 0.001,
+            "maxDrawdownPct": 0.0,
+        },
+        parsed=parsed,
+        provider="local",
+        model="deep",
+        quick_model="quick",
+        deep_model="deep",
+        reports={},
+        prompt_hash_value="abc123",
+        latency_seconds=0.1,
+    )
+
+
 def test_decision_low_confidence_cannot_force_risk_off_action():
     decision = ai_schemas.decision_from_parsed(
         state={"aiMinConfidence": 0.8, "gridMaxExposurePct": 0.35},
@@ -25,6 +47,76 @@ def test_decision_low_confidence_cannot_force_risk_off_action():
 
     assert decision["riskAction"] == "allow_grid"
     assert decision["flattenRecommended"] is False
+
+
+def test_decision_preserves_zero_risk_budget_for_reduce_exposure():
+    decision = _decision(
+        {
+            "riskAction": "reduce_exposure",
+            "confidence": 0.9,
+            "riskBudgetPct": 0.0,
+            "recommendedMaxExposurePct": 0.35,
+        }
+    )
+
+    assert decision["riskAction"] == "reduce_exposure"
+    assert decision["gridAllowed"] is False
+    assert decision["pauseNewBuys"] is True
+    assert decision["reduceExposure"] is True
+    assert decision["riskBudgetPct"] == 0.0
+    assert decision["recommendedMaxExposurePct"] == 0.0
+
+
+def test_decision_preserves_zero_risk_budget_for_flatten():
+    decision = _decision(
+        {
+            "riskAction": "flatten",
+            "confidence": 0.9,
+            "riskBudgetPct": 0.0,
+            "recommendedMaxExposurePct": 0.35,
+        }
+    )
+
+    assert decision["riskAction"] == "flatten"
+    assert decision["gridAllowed"] is False
+    assert decision["flattenRecommended"] is True
+    assert decision["reduceExposure"] is True
+    assert decision["riskBudgetPct"] == 0.0
+    assert decision["recommendedMaxExposurePct"] == 0.0
+
+
+def test_decision_keeps_allow_grid_minimum_when_risk_budget_is_zero():
+    decision = _decision(
+        {
+            "riskAction": "allow_grid",
+            "confidence": 0.9,
+            "riskBudgetPct": 0.0,
+            "recommendedMaxExposurePct": 0.35,
+        }
+    )
+
+    assert decision["riskAction"] == "allow_grid"
+    assert decision["gridAllowed"] is True
+    assert decision["riskBudgetPct"] == 0.05
+    assert decision["recommendedMaxExposurePct"] == 0.05
+
+
+def test_decision_low_confidence_risk_off_does_not_preserve_zero_risk_budget():
+    decision = _decision(
+        {
+            "riskAction": "reduce_exposure",
+            "confidence": 0.2,
+            "riskBudgetPct": 0.0,
+            "recommendedMaxExposurePct": 0.35,
+        },
+        state={"aiMinConfidence": 0.8},
+    )
+
+    assert decision["riskAction"] == "allow_grid"
+    assert decision["gridAllowed"] is True
+    assert decision["reduceExposure"] is False
+    assert decision["riskBudgetPct"] == 0.05
+    assert decision["recommendedMaxExposurePct"] == 0.05
 
 
 def test_decision_preserves_shadow_and_dry_run_flags():

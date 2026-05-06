@@ -91,6 +91,27 @@ def test_read_ai_decision_normalizes_new_risk_fields(monkeypatch):
     assert engine._ai_controls_active(signal) is True
 
 
+def test_read_ai_decision_preserves_zero_risk_budget(monkeypatch):
+    now_ts = datetime.now(timezone.utc).isoformat()
+    monkeypatch.setattr(
+        engine,
+        "_read_ai_signal",
+        lambda: {
+            "enabled": True,
+            "tsUtc": now_ts,
+            "riskAction": "reduce_exposure",
+            "riskBudgetPct": 0.0,
+            "recommendedMaxExposurePct": 0.35,
+        },
+    )
+
+    signal = engine._read_ai_decision_for_engine({"aiEnabled": True})
+
+    assert signal["riskAction"] == "reduce_exposure"
+    assert signal["reduceExposure"] is True
+    assert signal["riskBudgetPct"] == 0.0
+
+
 def test_read_ai_decision_accepts_naive_timestamp_and_list_numbers(monkeypatch):
     now_ts = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     monkeypatch.setattr(
