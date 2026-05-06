@@ -530,6 +530,116 @@ def test_grid_telemetry_unsupported_raw_branch_uses_configured_mode():
     assert payload["error"] == "unsupported gridMode 'flexy'"
 
 
+def test_status_stats_payload_uses_cumulative_values_for_status_counters():
+    stats = engine.Stats(
+        day="2026-05-06",
+        trades=1,
+        wins=0,
+        losses=1,
+        pnl_usdt=-5.0,
+        max_drawdown_pct=0.07,
+    )
+    cum = {
+        "trades": 4,
+        "wins": 3,
+        "losses": 1,
+        "realizedPnlUsdt": 12.5,
+    }
+
+    payload = engine._status_stats_payload(
+        stats=stats,
+        cum=cum,
+        entries_count=2,
+        exits_count=1,
+        has_open_position=True,
+        trend_strength=0.015,
+    )
+
+    assert payload == {
+        "day": "2026-05-06",
+        "trades": 4,
+        "closedTrades": 4,
+        "entries": 2,
+        "exits": 1,
+        "hasOpenPosition": True,
+        "wins": 3,
+        "losses": 1,
+        "pnlUsdt": 12.5,
+        "maxDrawdownPct": 0.07,
+        "trendStrength": 0.015,
+    }
+
+
+def test_status_stats_payload_uses_stats_values_without_cumulative():
+    stats = engine.Stats(
+        day="2026-05-06",
+        trades=3,
+        wins=2,
+        losses=1,
+        pnl_usdt=7.25,
+        max_drawdown_pct=0.03,
+    )
+
+    payload = engine._status_stats_payload(stats=stats)
+
+    assert payload == {
+        "day": "2026-05-06",
+        "trades": 3,
+        "wins": 2,
+        "losses": 1,
+        "pnlUsdt": 7.25,
+        "maxDrawdownPct": 0.03,
+    }
+
+
+def test_status_stats_payload_includes_cooldown_only_when_requested():
+    cooldown_until = datetime(2026, 5, 6, 12, 30, tzinfo=timezone.utc)
+    stats = engine.Stats(day="2026-05-06", cooldown_until=cooldown_until)
+
+    without_cooldown = engine._status_stats_payload(stats=stats)
+    with_cooldown = engine._status_stats_payload(stats=stats, include_cooldown=True)
+
+    assert "cooldownUntil" not in without_cooldown
+    assert with_cooldown["cooldownUntil"] == "2026-05-06T12:30:00+00:00"
+
+
+def test_status_stats_payload_passes_through_grid_and_ai_payloads():
+    stats = engine.Stats(day="2026-05-06")
+    grid_payload = {"mode": "scalpy", "skipped": True}
+    ai_signal = {"decision": "hold", "confidence": 0.8}
+
+    payload = engine._status_stats_payload(
+        stats=stats,
+        grid_payload=grid_payload,
+        ai_signal=ai_signal,
+    )
+
+    assert payload["grid"] is grid_payload
+    assert payload["ai"] is ai_signal
+
+
+def test_status_stats_payload_omits_detail_counters_when_not_supplied():
+    stats = engine.Stats(day="2026-05-06", trades=1, wins=1, pnl_usdt=2.0)
+    cum = {
+        "trades": 5,
+        "wins": 4,
+        "losses": 1,
+        "realizedPnlUsdt": 18.0,
+    }
+
+    payload = engine._status_stats_payload(stats=stats, cum=cum, trend_strength=0.02)
+
+    assert payload["trades"] == 5
+    assert payload["wins"] == 4
+    assert payload["losses"] == 1
+    assert payload["pnlUsdt"] == 18.0
+    assert payload["trendStrength"] == 0.02
+    assert "closedTrades" not in payload
+    assert "entries" not in payload
+    assert "exits" not in payload
+    assert "hasOpenPosition" not in payload
+
+
 def test_attach_ai_event_fields_preserves_empty_and_adds_known_fields():
     event = {"event": "ENTER"}
 

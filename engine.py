@@ -792,6 +792,53 @@ def _grid_telemetry(
     return payload
 
 
+def _status_stats_payload(
+    *,
+    stats: Stats,
+    cum: dict | None = None,
+    entries_count: int | None = None,
+    exits_count: int | None = None,
+    has_open_position: bool | None = None,
+    trend_strength: float | None = None,
+    grid_payload: dict | None = None,
+    ai_signal: dict | None = None,
+    include_cooldown: bool = False,
+) -> dict:
+    trades = int(cum.get("trades", stats.trades)) if cum is not None else stats.trades
+    wins = int(cum.get("wins", stats.wins)) if cum is not None else stats.wins
+    losses = int(cum.get("losses", stats.losses)) if cum is not None else stats.losses
+    pnl_usdt = float(cum.get("realizedPnlUsdt", stats.pnl_usdt)) if cum is not None else stats.pnl_usdt
+    include_detail_counts = entries_count is not None or exits_count is not None or has_open_position is not None
+
+    payload = {
+        "day": stats.day,
+        "trades": trades,
+    }
+    if include_detail_counts:
+        payload["closedTrades"] = trades
+    if entries_count is not None:
+        payload["entries"] = entries_count
+    if exits_count is not None:
+        payload["exits"] = exits_count
+    if has_open_position is not None:
+        payload["hasOpenPosition"] = has_open_position
+    payload.update({
+        "wins": wins,
+        "losses": losses,
+        "pnlUsdt": pnl_usdt,
+        "maxDrawdownPct": stats.max_drawdown_pct,
+    })
+    if trend_strength is not None:
+        payload["trendStrength"] = trend_strength
+    if include_cooldown:
+        payload["cooldownUntil"] = stats.cooldown_until.isoformat() if stats.cooldown_until else None
+    if grid_payload is not None:
+        payload["grid"] = grid_payload
+    if ai_signal is not None:
+        payload["ai"] = ai_signal
+    return payload
+
+
 def _position_payload(paper: PaperAccount, grid: GridState | None, price: float) -> dict | None:
     if paper.btc <= 0:
         return None
@@ -1156,19 +1203,14 @@ def main():
                 "usdt": paper.usdt,
                 "btc": paper.btc,
                 "position": _position_payload(paper, grid, price),
-                "stats": {
-                    "day": stats.day,
-                    "trades": int(cum.get("trades", stats.trades)),
-                    "closedTrades": int(cum.get("trades", stats.trades)),
-                    "entries": entries_count,
-                    "exits": exits_count,
-                    "hasOpenPosition": has_open_position,
-                    "wins": int(cum.get("wins", stats.wins)),
-                    "losses": int(cum.get("losses", stats.losses)),
-                    "pnlUsdt": float(cum.get("realizedPnlUsdt", stats.pnl_usdt)),
-                    "maxDrawdownPct": stats.max_drawdown_pct,
-                    "trendStrength": trend_strength,
-                    "grid": _grid_telemetry(
+                "stats": _status_stats_payload(
+                    stats=stats,
+                    cum=cum,
+                    entries_count=entries_count,
+                    exits_count=exits_count,
+                    has_open_position=has_open_position,
+                    trend_strength=trend_strength,
+                    grid_payload=_grid_telemetry(
                         state=state,
                         ai_signal=ai_signal,
                         effective_mode=None,
@@ -1179,8 +1221,8 @@ def main():
                         skipReason="unsupported_grid_mode",
                         error=str(exc),
                     ),
-                    "ai": ai_signal,
-                },
+                    ai_signal=ai_signal,
+                ),
                 "lastEvent": "GRID_CONFIG_INVALID",
             })
             time.sleep(1)
@@ -1207,20 +1249,15 @@ def main():
                 "usdt": paper.usdt,
                 "btc": paper.btc,
                 "position": _position_payload(paper, grid, price),
-                "stats": {
-                    "day": stats.day,
-                    "trades": int(cum.get("trades", stats.trades)),
-                    "closedTrades": int(cum.get("trades", stats.trades)),
-                    "entries": entries_count,
-                    "exits": exits_count,
-                    "hasOpenPosition": has_open_position,
-                    "wins": int(cum.get("wins", stats.wins)),
-                    "losses": int(cum.get("losses", stats.losses)),
-                    "pnlUsdt": float(cum.get("realizedPnlUsdt", stats.pnl_usdt)),
-                    "maxDrawdownPct": stats.max_drawdown_pct,
-                    "trendStrength": trend_strength,
-                    "cooldownUntil": stats.cooldown_until.isoformat() if stats.cooldown_until else None,
-                    "grid": _grid_telemetry(
+                "stats": _status_stats_payload(
+                    stats=stats,
+                    cum=cum,
+                    entries_count=entries_count,
+                    exits_count=exits_count,
+                    has_open_position=has_open_position,
+                    trend_strength=trend_strength,
+                    include_cooldown=True,
+                    grid_payload=_grid_telemetry(
                         state=state,
                         ai_signal=ai_signal,
                         effective_mode=grid_mode,
@@ -1230,8 +1267,8 @@ def main():
                         skipped=True,
                         skipReason=inactive_reason,
                     ),
-                    "ai": ai_signal,
-                },
+                    ai_signal=ai_signal,
+                ),
                 "lastEvent": "PAUSED" if inactive_reason == "paused" else "COOLDOWN",
             }
             _write_status(status_payload)
@@ -1375,19 +1412,14 @@ def main():
                     "usdt": paper.usdt,
                     "btc": paper.btc,
                     "position": None,
-                    "stats": {
-                        "day": stats.day,
-                        "trades": int(cum.get("trades", 0)),
-                        "closedTrades": int(cum.get("trades", 0)),
-                        "entries": entries_count,
-                        "exits": exits_count,
-                        "hasOpenPosition": False,
-                        "wins": int(cum.get("wins", 0)),
-                        "losses": int(cum.get("losses", 0)),
-                        "pnlUsdt": float(cum.get("realizedPnlUsdt", 0.0)),
-                        "maxDrawdownPct": stats.max_drawdown_pct,
-                        "trendStrength": trend_strength,
-                        "grid": _grid_telemetry(
+                    "stats": _status_stats_payload(
+                        stats=stats,
+                        cum=cum,
+                        entries_count=entries_count,
+                        exits_count=exits_count,
+                        has_open_position=False,
+                        trend_strength=trend_strength,
+                        grid_payload=_grid_telemetry(
                             state=state,
                             ai_signal=ai_signal,
                             effective_mode=grid_mode,
@@ -1395,8 +1427,8 @@ def main():
                             levels=grid.levels if grid else None,
                             open_orders=0,
                         ),
-                        "ai": ai_signal,
-                    },
+                        ai_signal=ai_signal,
+                    ),
                     "lastEvent": "EXIT",
                 })
                 _write_runtime_state({
@@ -1523,15 +1555,10 @@ def main():
                     "unrealizedPnlUsdt": 0.0,
                     "unrealizedPnlPct": 0.0,
                 },
-                "stats": {
-                    "day": stats.day,
-                    "trades": stats.trades,
-                    "wins": stats.wins,
-                    "losses": stats.losses,
-                    "pnlUsdt": stats.pnl_usdt,
-                    "maxDrawdownPct": stats.max_drawdown_pct,
-                    "trendStrength": trend_strength,
-                    "grid": _grid_telemetry(
+                "stats": _status_stats_payload(
+                    stats=stats,
+                    trend_strength=trend_strength,
+                    grid_payload=_grid_telemetry(
                         state=state,
                         ai_signal=ai_signal,
                         effective_mode=grid_mode,
@@ -1541,8 +1568,8 @@ def main():
                         skipped=True,
                         skipReason="ai_grid_disallowed",
                     ),
-                    "ai": ai_signal,
-                },
+                    ai_signal=ai_signal,
+                ),
                 "lastEvent": "AI_SKIP",
             })
             time.sleep(1)
@@ -1572,15 +1599,10 @@ def main():
                     "usdt": paper.usdt,
                     "btc": paper.btc,
                     "position": None,
-                    "stats": {
-                        "day": stats.day,
-                        "trades": stats.trades,
-                        "wins": stats.wins,
-                        "losses": stats.losses,
-                        "pnlUsdt": stats.pnl_usdt,
-                        "maxDrawdownPct": stats.max_drawdown_pct,
-                        "trendStrength": trend_strength,
-                        "grid": _grid_telemetry(
+                    "stats": _status_stats_payload(
+                        stats=stats,
+                        trend_strength=trend_strength,
+                        grid_payload=_grid_telemetry(
                             state=state,
                             ai_signal=ai_signal,
                             effective_mode=grid_mode,
@@ -1591,8 +1613,8 @@ def main():
                             skipReason="spacing_below_fee_floor",
                             requiredMinSpacingPct=min_edge_spacing,
                         ),
-                        "ai": ai_signal,
-                    },
+                        ai_signal=ai_signal,
+                    ),
                     "lastEvent": "GRID_SKIP",
                 })
                 time.sleep(1)
@@ -1746,19 +1768,13 @@ def main():
             "usdt": paper.usdt,
             "btc": paper.btc,
             "position": _position_payload(paper, grid, price),
-            "stats": {
-                "day": stats.day,
-                "trades": stats.trades,
-                "closedTrades": stats.trades,
-                "entries": entries_count,
-                "exits": exits_count,
-                "hasOpenPosition": has_open_position,
-                "wins": stats.wins,
-                "losses": stats.losses,
-                "pnlUsdt": stats.pnl_usdt,
-                "maxDrawdownPct": stats.max_drawdown_pct,
-                "trendStrength": trend_strength,
-                "grid": _grid_telemetry(
+            "stats": _status_stats_payload(
+                stats=stats,
+                entries_count=entries_count,
+                exits_count=exits_count,
+                has_open_position=has_open_position,
+                trend_strength=trend_strength,
+                grid_payload=_grid_telemetry(
                     state=state,
                     ai_signal=ai_signal,
                     effective_mode=grid_mode,
@@ -1766,8 +1782,8 @@ def main():
                     levels=grid.levels if grid else None,
                     open_orders=len(grid.orders) if grid else 0,
                 ),
-                "ai": ai_signal,
-            },
+                ai_signal=ai_signal,
+            ),
             "lastEvent": "TICK",
         }
         _write_status(status_payload)
