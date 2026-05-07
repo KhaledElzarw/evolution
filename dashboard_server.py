@@ -1,6 +1,7 @@
 import json
 import html as html_lib
 import hashlib
+import math
 import os
 import subprocess
 import time
@@ -17,7 +18,7 @@ from binance_client import BinanceSpotREST
 from dashboard_contracts import (
     SCHEMA_VERSION as DASHBOARD_SCHEMA_VERSION,
     validate_chart_tick_payload,
-    validate_dashboard_payload,  # noqa: F401 - late-bound into dashboard_routes.Handler
+    validate_dashboard_payload as _validate_dashboard_payload,
     validate_market_payload,
 )
 from dashboard_data import DashboardDataAdapter
@@ -36,6 +37,7 @@ TRADES_PATH = BASE_DIR / "trades.jsonl"
 HISTORY_PATH = BASE_DIR / "dashboard_history.json"
 INTELLIGENCE_PATH = BASE_DIR / "dashboard_intelligence.json"
 AI_SIGNAL_PATH = BASE_DIR / "ai_signal.json"
+AI_DECISIONS_PATH = BASE_DIR / "ai_decisions.jsonl"
 STATIC_DIR = BASE_DIR / "dashboard" / "static"
 HOST = os.getenv("TRADEBOT_DASHBOARD_HOST", "0.0.0.0")
 PORT = int(os.getenv("TRADEBOT_DASHBOARD_PORT", "8844"))
@@ -170,7 +172,7 @@ HTML = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tradebot Live Dashboard</title>
-  <link rel="stylesheet" href="/static/dashboard.v1.css?v=5">
+  <link rel="stylesheet" href="/static/dashboard.v1.css?v=6">
 </head>
 <body>
 <div class="wrap">
@@ -274,6 +276,22 @@ HTML = r'''<!doctype html>
       </div>
     </section>
 
+    <section class="card ai-decisions-card" id="ai-decisions-card" data-default-col="13" data-default-span="12">
+      <div class="card-head"><h2>AI Decisions</h2><div class="card-actions"><span class="footer-note">read-only memory</span></div></div>
+      <div class="card-body ai-decision-pane">
+        <div class="pager">
+          <div class="pager-controls">
+            <button class="btn" id="ai-decisions-first-btn" type="button">First</button>
+            <button class="btn" id="ai-decisions-prev-btn" type="button">Prev</button>
+            <button class="btn" id="ai-decisions-next-btn" type="button">Next</button>
+            <button class="btn" id="ai-decisions-last-btn" type="button">Last</button>
+          </div>
+          <div class="page-indicator" id="ai-decisions-page-indicator">Page 1 / 1</div>
+        </div>
+        <div class="ai-decision-detail" id="ai-decisions-body"></div>
+      </div>
+    </section>
+
     <section class="card config-card" id="config-card" data-default-col="13" data-default-span="12">
       <div class="card-head"><h2>Bot Configuration</h2><div class="card-actions"><span class="drag-hint">editable</span></div></div>
       <div class="card-body">
@@ -312,7 +330,7 @@ HTML = r'''<!doctype html>
     </section>
   </div>
 </div>
-<script src="/static/dashboard.v1.js?v=5"></script>
+<script src="/static/dashboard.v1.js?v=6"></script>
 </body>
 </html>'''
 
@@ -517,6 +535,242 @@ def ai_endpoint_payload(state: dict) -> tuple[dict, dict[str, list[str]]]:
     endpoint = active_ai_endpoint(state)
     models_by_endpoint = get_ai_endpoint_models(state)
     return endpoint, models_by_endpoint
+
+
+def _safe_num(value, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except Exception:
+        return default
+    return number if math.isfinite(number) else default
+
+
+def _pct_delta(now, before) -> float | None:
+    before_num = _safe_num(before, 0.0)
+    if before_num == 0:
+        return None
+    return (_safe_num(now, before_num) / before_num) - 1.0
+
+
+def _safe_text(value, *, max_chars: int = 800) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:max_chars]
+
+
+def _safe_text_list(value, *, limit: int = 4, max_chars: int = 300) -> list[str]:
+    if isinstance(value, str):
+        raw_items = [value]
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        return []
+    items: list[str] = []
+    for item in raw_items:
+        text = _safe_text(item, max_chars=max_chars)
+        if text:
+            items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _agent_report_summary(role: str, report: dict) -> dict:
+    report = report or {}
+    raw = report.get("raw") if isinstance(report.get("raw"), dict) else {}
+    evidence = report.get("evidence") or raw.get("evidence") or []
+    if isinstance(evidence, dict):
+        evidence_items = [f"{key}: {value}" for key, value in evidence.items()]
+    elif isinstance(evidence, list):
+        evidence_items = evidence
+    elif evidence:
+        evidence_items = [evidence]
+    else:  # pragma: no cover - evidence is normalized to [] before this defensive fallback.
+        evidence_items = []
+    return {
+        "role": _safe_text(role, max_chars=80) or "",
+        "recommendation": _safe_text(
+            report.get("recommendation") or raw.get("recommendation") or "--",
+            max_chars=120,
+        ),
+        "riskScore": report.get("risk_score", raw.get("riskScore")),
+        "confidence": report.get("confidence", raw.get("confidence")),
+        "summary": _safe_text(report.get("summary") or raw.get("summary") or "", max_chars=500) or "",
+        "evidence": _safe_text_list(evidence_items, limit=4, max_chars=300),
+        "latencySeconds": raw.get("_latencySeconds"),
+    }
+
+
+def _projected_impact(decision: dict) -> str:
+    action = str(decision.get("riskAction") or "hold")
+    spacing = _safe_num(decision.get("recommendedSpacingPct"), 0.0) * 100.0
+    exposure = _safe_num(decision.get("recommendedMaxExposurePct"), 0.0) * 100.0
+    levels = int(_safe_num(decision.get("recommendedLevels"), 0))
+    if action == "allow_grid":
+        return f"Keep grid active with {levels} levels, {spacing:.2f}% spacing, max exposure {exposure:.1f}%."
+    if action == "pause_new_buys":
+        return "Stop opening new buy levels while existing sells can still work out of inventory."
+    if action == "sells_only":
+        return "Let sell-side exits continue and block new accumulation until risk cools."
+    if action == "reduce_exposure":
+        return f"Lower exposure budget toward {exposure:.1f}% and avoid adding inventory."
+    if action == "flatten":
+        return "Recommend exiting the open paper position if confidence clears the flatten threshold."
+    return "Hold current deterministic grid settings unless risk gates say otherwise."
+
+
+def _realized_impact(decision: dict, status: dict, cumulative: dict) -> dict:
+    raw = decision.get("raw") if isinstance(decision.get("raw"), dict) else {}
+    start_equity = raw.get("equityUsdt") if raw else decision.get("equityUsdt")
+    start_price = raw.get("price") if raw else decision.get("price")
+    start_trades = raw.get("closedTrades") if raw else decision.get("closedTrades")
+    now_equity = status.get("equityUsdt")
+    now_price = status.get("price")
+    trades_now = cumulative.get("trades")
+    equity_delta = None
+    if start_equity is not None and now_equity is not None:
+        equity_delta = _safe_num(now_equity) - _safe_num(start_equity)
+    trade_delta = None
+    if start_trades is not None and trades_now is not None:
+        trade_delta = int(_safe_num(trades_now)) - int(_safe_num(start_trades))
+    return {
+        "equityDeltaUsdt": equity_delta,
+        "equityDeltaPct": _pct_delta(now_equity, start_equity) if equity_delta is not None else None,
+        "priceDeltaPct": _pct_delta(now_price, start_price)
+        if start_price is not None and now_price is not None
+        else None,
+        "tradeDelta": trade_delta,
+        "currentEquityUsdt": now_equity,
+        "startEquityUsdt": start_equity,
+    }
+
+
+def _strategy_profile_summary(value: dict | None) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    summary = {
+        "name": _safe_text(value.get("name"), max_chars=160),
+        "mode": _safe_text(value.get("mode"), max_chars=80),
+        "spacingPct": value.get("spacingPct"),
+        "levels": value.get("levels"),
+        "maxExposurePct": value.get("maxExposurePct"),
+        "perLevelUsdt": value.get("perLevelUsdt"),
+    }
+    return {key: val for key, val in summary.items() if val is not None} or None
+
+
+def _validation_report_summary(value: dict | None) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    summary = {
+        "passed": value.get("passed"),
+        "mode": _safe_text(value.get("mode"), max_chars=80),
+        "sampleCount": value.get("sampleCount"),
+        "error": _safe_text(value.get("error"), max_chars=500),
+    }
+    return {key: val for key, val in summary.items() if val is not None} or None
+
+
+def _normalized_ai_decision_row(item: dict, status: dict, cumulative: dict) -> dict | None:
+    decision = item.get("decision") if isinstance(item.get("decision"), dict) else item
+    if not isinstance(decision, dict):
+        return None
+    useful_keys = {
+        "decisionId",
+        "tsUtc",
+        "model",
+        "riskAction",
+        "confidence",
+        "recommendedMode",
+        "reports",
+        "note",
+        "error",
+        "keyRisks",
+    }
+    if not useful_keys.intersection(decision.keys()) and not useful_keys.intersection(item.keys()):
+        return None
+    reports = decision.get("reports") or item.get("reports") or {}
+    if not isinstance(reports, dict):
+        reports = {}
+    profile = decision.get("strategyProfile")
+    validation = decision.get("validationReport")
+    return {
+        "decisionId": _safe_text(decision.get("decisionId") or item.get("decisionId"), max_chars=120),
+        "tsUtc": _safe_text(decision.get("tsUtc") or item.get("tsUtc"), max_chars=80),
+        "model": _safe_text(decision.get("model") or item.get("model"), max_chars=120),
+        "source": _safe_text(decision.get("source"), max_chars=80),
+        "riskAction": _safe_text(decision.get("riskAction"), max_chars=80),
+        "gridAllowed": decision.get("gridAllowed"),
+        "pauseNewBuys": decision.get("pauseNewBuys"),
+        "allowSellsOnly": decision.get("allowSellsOnly"),
+        "flattenRecommended": decision.get("flattenRecommended"),
+        "reduceExposure": decision.get("reduceExposure"),
+        "confidence": decision.get("confidence"),
+        "regime": _safe_text(decision.get("regime"), max_chars=120),
+        "directionBias": _safe_text(decision.get("directionBias"), max_chars=120),
+        "recommendedMode": _safe_text(decision.get("recommendedMode"), max_chars=80),
+        "recommendedSpacingPct": decision.get("recommendedSpacingPct"),
+        "recommendedLevels": decision.get("recommendedLevels"),
+        "recommendedMaxExposurePct": decision.get("recommendedMaxExposurePct"),
+        "strategyProfileId": _safe_text(decision.get("strategyProfileId"), max_chars=120),
+        "strategyProfileName": _safe_text(decision.get("strategyProfileName"), max_chars=160),
+        "strategyProfileStatus": _safe_text(decision.get("strategyProfileStatus"), max_chars=80),
+        "strategyProfile": _strategy_profile_summary(profile),
+        "researchSnapshotId": _safe_text(decision.get("researchSnapshotId"), max_chars=120),
+        "validationReport": _validation_report_summary(validation),
+        "dryRun": decision.get("dryRun"),
+        "shadowMode": decision.get("shadowMode"),
+        "stale": decision.get("stale"),
+        "latencySeconds": decision.get("latencySeconds") or item.get("latencySeconds"),
+        "note": _safe_text(decision.get("note"), max_chars=1200),
+        "keyRisks": _safe_text_list(decision.get("keyRisks"), limit=4, max_chars=300),
+        "projectedImpact": _projected_impact(decision),
+        "realizedImpact": _realized_impact(decision, status, cumulative),
+        "agents": [_agent_report_summary(role, report) for role, report in reports.items() if isinstance(report, dict)],
+        "error": _safe_text(decision.get("error"), max_chars=500),
+    }
+
+
+def read_ai_decisions(status: dict | None = None, cumulative: dict | None = None, limit: int = 30) -> list[dict]:
+    try:
+        safe_limit = max(0, min(50, int(limit)))
+    except Exception:
+        safe_limit = 30
+    if safe_limit <= 0 or not AI_DECISIONS_PATH.exists() or not AI_DECISIONS_PATH.is_file():
+        return []
+    status = status or {}
+    cumulative = cumulative or {}
+    try:
+        lines = AI_DECISIONS_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+    rows: list[dict] = []
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(item, dict):
+            continue
+        row = _normalized_ai_decision_row(item, status, cumulative)
+        if row is None:
+            continue
+        rows.append(row)
+        if len(rows) >= safe_limit:
+            break
+    return rows
+
+
+def validate_dashboard_payload(payload: dict) -> dict:
+    if "aiDecisions" not in payload:
+        payload = dict(payload)
+        payload["aiDecisions"] = read_ai_decisions(payload.get("status") or {}, payload.get("cumulative") or {})
+    return _validate_dashboard_payload(payload)
 
 
 def read_events() -> list[dict]:
@@ -1419,6 +1673,7 @@ def build_market_payload(qs: dict[str, list[str]]) -> dict:
         'runtime': runtime,
         'cumulative': cumulative,
         'events': read_events(),
+        'aiDecisions': read_ai_decisions(status_payload, cumulative),
         'ohlcv': ohlcv,
         'chartInterval': requested_interval,
         'chartLimit': limit,

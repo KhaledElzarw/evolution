@@ -1,3 +1,4 @@
+import json
 from urllib.parse import urlparse
 
 import dashboard_server
@@ -115,6 +116,177 @@ def test_coerce_state_patch_rejects_flexy_grid_mode():
         raise AssertionError("expected ValueError")
 
 
+def test_read_ai_decisions_missing_and_empty_file(monkeypatch, tmp_path):
+    decisions_path = tmp_path / "ai_decisions.jsonl"
+    monkeypatch.setattr(dashboard_server, "AI_DECISIONS_PATH", decisions_path)
+
+    assert dashboard_server.read_ai_decisions() == []
+
+    decisions_path.write_text("", encoding="utf-8")
+
+    assert dashboard_server.read_ai_decisions() == []
+
+
+def test_read_ai_decisions_skips_malformed_and_normalizes_nested_and_flat_rows(
+    monkeypatch,
+    tmp_path,
+):
+    decisions_path = tmp_path / "ai_decisions.jsonl"
+    decisions_path.write_text(
+        "\n".join([
+            "{malformed",
+            json.dumps({
+                "decision": {
+                    "decisionId": "old-nested",
+                    "tsUtc": "2026-05-01T00:00:00+00:00",
+                    "riskAction": "allow_grid",
+                    "confidence": 0.42,
+                    "recommendedSpacingPct": 0.01,
+                    "recommendedLevels": 5,
+                    "recommendedMaxExposurePct": 0.35,
+                    "raw": {"equityUsdt": 90, "price": 100, "closedTrades": 1},
+                    "strategyProfile": {
+                        "name": "Scalpy",
+                        "spacingPct": 0.01,
+                        "levels": 5,
+                        "secretToken": "not-for-display",
+                    },
+                    "validationReport": {
+                        "passed": False,
+                        "mode": "shadow",
+                        "sampleCount": 12,
+                        "secretToken": "not-for-display",
+                    },
+                    "reports": {
+                        "risk_manager": {
+                            "recommendation": "<hold>",
+                            "evidence": ["watch drawdown"],
+                            "summary": "Keep exposure stable",
+                        }
+                    },
+                }
+            }),
+            json.dumps({
+                "decisionId": "new-flat",
+                "tsUtc": "2026-05-01T00:01:00+00:00",
+                "riskAction": "pause_new_buys",
+                "note": "flat row is displayable",
+            }),
+        ])
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "AI_DECISIONS_PATH", decisions_path)
+
+    rows = dashboard_server.read_ai_decisions(
+        {"equityUsdt": 99, "price": 110},
+        {"trades": 3},
+        limit=10,
+    )
+
+    assert [row["decisionId"] for row in rows] == ["new-flat", "old-nested"]
+    nested = rows[1]
+    assert nested["agents"][0]["role"] == "risk_manager"
+    assert nested["agents"][0]["recommendation"] == "<hold>"
+    assert nested["strategyProfile"] == {"name": "Scalpy", "spacingPct": 0.01, "levels": 5}
+    assert nested["validationReport"] == {
+        "passed": False,
+        "mode": "shadow",
+        "sampleCount": 12,
+    }
+    assert nested["realizedImpact"]["equityDeltaUsdt"] == 9.0
+    assert nested["realizedImpact"]["tradeDelta"] == 2
+
+
+def test_read_ai_decisions_caps_and_orders_newest_first(monkeypatch, tmp_path):
+    decisions_path = tmp_path / "ai_decisions.jsonl"
+    decisions_path.write_text(
+        "\n".join(
+            json.dumps({"decisionId": f"decision-{idx}", "riskAction": "allow_grid"})
+            for idx in range(60)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "AI_DECISIONS_PATH", decisions_path)
+
+    rows = dashboard_server.read_ai_decisions(limit=1000)
+
+    assert len(rows) == 50
+    assert rows[0]["decisionId"] == "decision-59"
+    assert rows[-1]["decisionId"] == "decision-10"
+
+
+def test_read_ai_decisions_covers_malformed_runtime_edges(monkeypatch, tmp_path):
+    decisions_path = tmp_path / "ai_decisions.jsonl"
+    decisions_path.write_text(
+        "\n".join([
+            "",
+            "[]",
+            json.dumps({"unrelated": True}),
+            json.dumps({
+                "decisionId": "edge-row",
+                "riskAction": "allow_grid",
+                "reports": "bad-shape",
+                "keyRisks": "single risk",
+            }),
+        ])
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "AI_DECISIONS_PATH", decisions_path)
+
+    rows = dashboard_server.read_ai_decisions(limit="not-a-number")
+
+    assert len(rows) == 1
+    assert rows[0]["decisionId"] == "edge-row"
+    assert rows[0]["agents"] == []
+    assert rows[0]["keyRisks"] == ["single risk"]
+
+
+def test_read_ai_decisions_returns_empty_when_file_read_fails(monkeypatch):
+    class BrokenDecisionsPath:
+        def exists(self):
+            return True
+
+        def is_file(self):
+            return True
+
+        def read_text(self, **kwargs):
+            raise OSError("cannot read")
+
+    monkeypatch.setattr(dashboard_server, "AI_DECISIONS_PATH", BrokenDecisionsPath())
+
+    assert dashboard_server.read_ai_decisions() == []
+
+
+def test_normalized_ai_decision_row_rejects_duck_typed_non_dict():
+    class RowLike:
+        def get(self, key):
+            return None
+
+    assert dashboard_server._normalized_ai_decision_row(RowLike(), {}, {}) is None
+
+
+def test_ai_decision_impact_helpers_tolerate_missing_values():
+    realized = dashboard_server._realized_impact({}, {}, {})
+
+    assert dashboard_server._projected_impact({}).startswith("Hold current")
+    assert dashboard_server._projected_impact({"riskAction": "sells_only"}).startswith("Let sell-side")
+    assert dashboard_server._projected_impact({
+        "riskAction": "reduce_exposure",
+        "recommendedMaxExposurePct": 0.25,
+    }).startswith("Lower exposure budget toward 25.0%")
+    assert dashboard_server._projected_impact({"riskAction": "flatten"}).startswith("Recommend exiting")
+    assert dashboard_server._pct_delta(10, 0) is None
+    assert dashboard_server._safe_num("nan", 7.0) == 7.0
+    assert dashboard_server._safe_text("   ") is None
+    assert dashboard_server._safe_text_list("single risk") == ["single risk"]
+    assert dashboard_server._agent_report_summary("risk_manager", {})["evidence"] == []
+    assert realized["equityDeltaUsdt"] is None
+    assert realized["priceDeltaPct"] is None
+
+
 def test_mutation_auth_allows_when_token_unset(monkeypatch):
     monkeypatch.setattr(dashboard_server, "DASHBOARD_TOKEN", "")
 
@@ -135,7 +307,7 @@ def test_mutation_auth_checks_header_and_query(monkeypatch):
     )
 
 
-def test_market_payload_can_skip_ohlcv_for_status_poll(monkeypatch):
+def test_market_payload_can_skip_ohlcv_for_status_poll(monkeypatch, tmp_path):
     def fake_read_json(path):
         if path == dashboard_server.STATUS_PATH:
             return {"symbol": "BTCUSDT", "price": 100.0, "tsUtc": "2026-05-01T00:00:00+00:00"}
@@ -150,14 +322,40 @@ def test_market_payload_can_skip_ohlcv_for_status_poll(monkeypatch):
     monkeypatch.setattr(dashboard_server, "get_ohlcv", fail_get_ohlcv)
     monkeypatch.setattr(dashboard_server, "read_events", lambda: [{"event": "ENTER", "price": 100.0}])
     monkeypatch.setattr(dashboard_server, "freshness_seconds", lambda ts: 0.5)
+    monkeypatch.setattr(dashboard_server, "AI_DECISIONS_PATH", tmp_path / "missing.jsonl")
 
     payload = dashboard_server.build_market_payload({"interval": ["1s"], "ohlcv": ["0"]})
 
     assert payload["status"]["price"] == 100.0
     assert payload["ohlcv"] == []
     assert payload["events"] == [{"event": "ENTER", "price": 100.0}]
+    assert payload["aiDecisions"] == []
     assert payload["chartInterval"] == "1s"
     assert payload["refreshMs"] >= 1000
+
+
+def test_market_payload_includes_ai_decisions(monkeypatch, tmp_path):
+    decisions_path = tmp_path / "ai_decisions.jsonl"
+    decisions_path.write_text(
+        json.dumps({"decisionId": "payload-decision", "riskAction": "allow_grid"}) + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_read_json(path):
+        if path == dashboard_server.STATUS_PATH:
+            return {"symbol": "BTCUSDT", "price": 100.0, "tsUtc": "2026-05-01T00:00:00+00:00"}
+        if path == dashboard_server.STATE_PATH:
+            return {"symbol": "BTCUSDT", "interval": "1s"}
+        return {}
+
+    monkeypatch.setattr(dashboard_server, "read_json", fake_read_json)
+    monkeypatch.setattr(dashboard_server, "read_events", lambda: [])
+    monkeypatch.setattr(dashboard_server, "freshness_seconds", lambda ts: 0.5)
+    monkeypatch.setattr(dashboard_server, "AI_DECISIONS_PATH", decisions_path)
+
+    payload = dashboard_server.build_market_payload({"interval": ["1s"], "ohlcv": ["0"]})
+
+    assert payload["aiDecisions"][0]["decisionId"] == "payload-decision"
 
 
 def test_market_payload_uses_fresh_status_price_for_active_candle(monkeypatch):

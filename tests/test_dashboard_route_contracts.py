@@ -140,8 +140,8 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
     html = body.decode("utf-8")
     assert status == 200
     assert headers["Content-Type"].startswith("text/html")
-    assert '<script src="/static/dashboard.v1.js?v=5"></script>' in html
-    assert 'href="/static/dashboard.v1.css?v=5"' in html
+    assert '<script src="/static/dashboard.v1.js?v=6"></script>' in html
+    assert 'href="/static/dashboard.v1.css?v=6"' in html
     assert "BTCUSDT" in html
     required_ids = [
         "sticky-summary",
@@ -162,6 +162,13 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
         "hover-ohlcv",
         "news-stack",
         "signal-table",
+        "ai-decisions-card",
+        "ai-decisions-body",
+        "ai-decisions-page-indicator",
+        "ai-decisions-first-btn",
+        "ai-decisions-prev-btn",
+        "ai-decisions-next-btn",
+        "ai-decisions-last-btn",
     ]
     for element_id in required_ids:
         assert f'id="{element_id}"' in html
@@ -176,7 +183,7 @@ def test_static_route_serves_dashboard_js_asset(monkeypatch, tmp_path):
 
     server = _start_server()
     try:
-        status, headers, body = _request(server, "/static/dashboard.v1.js?v=5")
+        status, headers, body = _request(server, "/static/dashboard.v1.js?v=6")
     finally:
         server.shutdown()
         server.server_close()
@@ -246,8 +253,21 @@ def test_get_route_exception_returns_current_500_json_contract(monkeypatch):
         server.server_close()
 
 
-def test_api_dashboard_route_returns_dashboard_json_contract(monkeypatch):
+def test_api_dashboard_route_returns_dashboard_json_contract(monkeypatch, tmp_path):
     _patch_dashboard_reads(monkeypatch)
+    decisions_path = tmp_path / "ai_decisions.jsonl"
+    decisions_path.write_text(
+        json.dumps({
+            "decision": {
+                "decisionId": "route-decision",
+                "tsUtc": "2026-05-02T00:00:00+00:00",
+                "riskAction": "allow_grid",
+            }
+        })
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "AI_DECISIONS_PATH", decisions_path)
     server = _start_server()
     try:
         status, headers, body = _request(server, "/api/dashboard?interval=1s&limit=5&offset=2&ohlcv=0")
@@ -265,6 +285,7 @@ def test_api_dashboard_route_returns_dashboard_json_contract(monkeypatch):
     assert payload["chartOffset"] == 2
     assert payload["ohlcv"] == []
     assert payload["state"]["aiEndpointKey"] == "local"
+    assert payload["aiDecisions"][0]["decisionId"] == "route-decision"
 
 
 def test_api_dashboard_defaults_bad_query_values_and_merges_ohlcv(monkeypatch):

@@ -365,6 +365,219 @@ def test_refresh_tolerates_missing_optional_refresh_controls(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for dashboard JS unit test")
+
+    harness = r"""
+    const assert = require('assert');
+    const vm = require('vm');
+    const script = process.env.DASHBOARD_SCRIPT;
+
+    function makeElement(id) {
+      const ctx = {
+        scale(){}, clearRect(){}, beginPath(){}, arc(){}, stroke(){}, fillText(){},
+        fillRect(){}, moveTo(){}, lineTo(){}, strokeRect(){}, closePath(){}, fill(){},
+      };
+      return {
+        id,
+        tagName: id === 'top-timeframe' ? 'A' : 'DIV',
+        href: '',
+        textContent: '',
+        innerHTML: '',
+        children: [],
+        disabled: false,
+        value: '',
+        style: {},
+        dataset: {},
+        className: '',
+        classList: { toggle(){}, add(){}, remove(){} },
+        addEventListener(){},
+        appendChild(child){ this.children.push(child); },
+        querySelector(){ return null; },
+        querySelectorAll(){ return []; },
+        getBoundingClientRect(){ return { width: 1200, height: 520, left: 0, top: 0 }; },
+        getContext(){ return ctx; },
+        parentElement: { querySelector(){ return { remove(){} }; } },
+      };
+    }
+
+    const ids = [
+      'theme-toggle','bot-toggle-btn','ai-toggle-btn','reset-layout-btn',
+      'events-first-btn','events-prev-btn','events-next-btn','events-last-btn',
+      'ai-decisions-first-btn','ai-decisions-prev-btn','ai-decisions-next-btn',
+      'ai-decisions-last-btn','orders-tab-open-btn','orders-tab-history-btn',
+      'orders-filter-buy-btn','orders-filter-sell-btn','orders-first-btn',
+      'orders-prev-btn','orders-next-btn','orders-last-btn','config-save-btn',
+      'fresh-label','server-time','sticky-summary','trading-state-label',
+      'state-mode','state-risk','state-exposure','state-action','chart-price-pill',
+      'chart-quote-line','status-list','events-body','events-page-indicator',
+      'ai-decisions-body','ai-decisions-page-indicator','orders-body',
+      'orders-page-indicator','timeframe-controls','news-stack','signal-table',
+      'final-regime-title','final-regime-copy','regime-updated','macro-calendar',
+      'config-form-grid','market-legend','hover-ohlcv','latest-candle',
+      'market-chart','chart-stream-status','boot-error','top-timeframe'
+    ];
+    const elements = new Map(ids.map(id => [id, makeElement(id)]));
+
+    const dashboardSample = {
+      status: {
+        tsUtc: '2026-05-01T00:00:00+00:00',
+        symbol: 'BTCUSDT',
+        price: 100,
+        equityUsdt: 500,
+        btc: 0.1,
+        usdt: 490,
+        stats: { grid: {}, ai: {} },
+        position: {},
+      },
+      state: { paused: false, aiEnabled: true, symbol: 'BTCUSDT', interval: '1m', gridMode: 'scalpy' },
+      runtime: { savedAt: '2026-05-01T00:00:00+00:00', grid: { orders: [] } },
+      cumulative: { realizedPnlUsdt: 0, feesPaidUsdt: 0 },
+      events: [],
+      aiDecisions: [{ decisionId: 'refresh-row', riskAction: 'allow_grid', note: 'from refresh' }],
+      ohlcv: [],
+      freshnessSeconds: 0.1,
+      serverTimeUtc: '2026-05-01T00:00:00+00:00',
+      seq: 2,
+      serverInstanceId: 'server-1',
+      channel: 'dashboard',
+      aiModels: [],
+      aiEndpoints: [],
+      aiEndpointModels: {},
+      intelligence: {},
+      refreshMs: 1000,
+      dashboardRefreshMs: 60000,
+    };
+
+    const sandbox = {
+      console,
+      URL,
+      URLSearchParams,
+      Number,
+      Math,
+      Date,
+      JSON,
+      Object,
+      Array,
+      Set,
+      Map,
+      String,
+      Error,
+      AbortController,
+      devicePixelRatio: 1,
+      localStorage: { getItem(){ return null; }, setItem(){}, removeItem(){} },
+      history: { replaceState(){} },
+      document: {
+        hidden: false,
+        body: { classList: { toggle(){}, add(){}, remove(){} } },
+        getElementById(id){ return elements.get(id) || null; },
+        createElement(tag){ return makeElement(tag); },
+        querySelector(){ return null; },
+        querySelectorAll(){ return []; },
+        addEventListener(){},
+      },
+      window: {
+        location: {
+          href: 'http://localhost/?interval=1m',
+          origin: 'http://localhost',
+          protocol: 'http:',
+          host: 'localhost',
+          pathname: '/',
+          search: '?interval=1m',
+        },
+        addEventListener(){},
+      },
+      requestAnimationFrame(fn){ fn(); return 1; },
+      cancelAnimationFrame(){},
+      setInterval(){ return 1; },
+      clearInterval(){},
+      setTimeout(){ return 1; },
+      clearTimeout(){},
+      getComputedStyle(){ return { getPropertyValue(){ return '#111'; } }; },
+      fetch(){ return Promise.resolve({ ok: true, json: async () => dashboardSample }); },
+      WebSocket: function(){ return { addEventListener(){}, close(){} }; },
+      EventSource: function(){ return { addEventListener(){}, close(){} }; },
+    };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(script + `
+      globalThis.__aiDecisionTest = {
+        stateUi,
+        renderAiDecisions,
+        changeAiDecisionPage,
+        applyLiveMarketPayload,
+        refresh,
+      };
+    `, sandbox);
+
+    const t = sandbox.__aiDecisionTest;
+    const body = elements.get('ai-decisions-body');
+    assert.doesNotThrow(() => t.renderAiDecisions([]));
+    assert.ok(body.innerHTML.includes('No AI decisions yet'));
+    assert.strictEqual(elements.get('ai-decisions-next-btn').disabled, true);
+
+    const decisions = [
+      {
+        decision: {
+          decisionId: 'nested-<bad>',
+          tsUtc: '2026-05-01T00:00:00+00:00',
+          riskAction: 'allow_grid',
+          confidence: 0.25,
+          note: '<script>bad</script>',
+          agents: [{ role: 'risk_manager', recommendation: '<hold>', summary: 'watch <risk>' }],
+          keyRisks: ['risk <x>'],
+          strategyProfile: { name: 'Scalpy <fast>', spacingPct: 0.01, levels: 3 },
+          validationReport: { passed: false, error: 'bad <err>' },
+        },
+      },
+      { decisionId: 'flat-2', riskAction: 'pause_new_buys', note: 'flat row' },
+      null,
+      'bad',
+    ];
+    assert.doesNotThrow(() => t.renderAiDecisions(decisions));
+    assert.strictEqual(t.stateUi.lastAiDecisions.length, 2);
+    assert.ok(body.innerHTML.includes('nested-&lt;bad&gt;'));
+    assert.ok(body.innerHTML.includes('&lt;script&gt;bad&lt;/script&gt;'));
+    assert.ok(!body.innerHTML.includes('<script>'));
+
+    assert.doesNotThrow(() => t.changeAiDecisionPage('next'));
+    assert.ok(body.innerHTML.includes('flat-2'));
+    assert.strictEqual(elements.get('ai-decisions-prev-btn').disabled, false);
+    assert.strictEqual(elements.get('ai-decisions-next-btn').disabled, true);
+
+    elements.delete('ai-decisions-body');
+    assert.doesNotThrow(() => t.renderAiDecisions(decisions));
+    elements.set('ai-decisions-body', body);
+
+    assert.doesNotThrow(() => t.applyLiveMarketPayload({
+      ...dashboardSample,
+      channel: 'status',
+      seq: 1,
+      aiDecisions: [{ decisionId: 'live-row', riskAction: 'allow_grid', note: 'from live payload' }],
+    }));
+    assert.ok(body.innerHTML.includes('live-row'));
+
+    (async () => {
+      await assert.doesNotReject(async () => t.refresh());
+      assert.ok(body.innerHTML.includes('refresh-row'));
+    })().catch(err => {
+      console.error(err);
+      process.exit(1);
+    });
+    """
+    result = subprocess.run(
+        [node, "-e", textwrap.dedent(harness)],
+        cwd=".",
+        env={"DASHBOARD_SCRIPT": _dashboard_script()},
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_summary_and_chart_renderers_tolerate_missing_optional_targets(tmp_path):
     node = shutil.which("node")
     if not node:

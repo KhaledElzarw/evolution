@@ -53,6 +53,8 @@ const stateUi = {
   theme: localStorage.getItem('tradebot-theme') || 'light',
   lastSnapshot: {},
   lastEvents: [],
+  lastAiDecisions: [],
+  aiDecisionPage: 0,
   eventPage: -1,
   eventPageSize: 5,
   lastOrders: [],
@@ -124,6 +126,10 @@ document.getElementById('events-first-btn').addEventListener('click', () => chan
 document.getElementById('events-prev-btn').addEventListener('click', () => changeEventPage('prev'));
 document.getElementById('events-next-btn').addEventListener('click', () => changeEventPage('next'));
 document.getElementById('events-last-btn').addEventListener('click', () => changeEventPage('last'));
+bindClickIfPresent('ai-decisions-first-btn', () => changeAiDecisionPage('first'));
+bindClickIfPresent('ai-decisions-prev-btn', () => changeAiDecisionPage('prev'));
+bindClickIfPresent('ai-decisions-next-btn', () => changeAiDecisionPage('next'));
+bindClickIfPresent('ai-decisions-last-btn', () => changeAiDecisionPage('last'));
 document.getElementById('orders-tab-open-btn').addEventListener('click', () => setOrderTab('open'));
 document.getElementById('orders-tab-history-btn').addEventListener('click', () => setOrderTab('history'));
 document.getElementById('orders-filter-buy-btn').addEventListener('click', () => setOrderFilter('BUY'));
@@ -136,7 +142,7 @@ document.getElementById('config-save-btn').addEventListener('click', saveConfig)
 
 function fmtNum(v, digits = 2) { if (v === null || v === undefined || Number.isNaN(Number(v))) return '--'; return Number(v).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }); }
 function fmtMoney(v) { return v === null || v === undefined ? '--' : `$${fmtNum(v, 2)}`; }
-function fmtPct(v) { return v === null || v === undefined ? '--' : `${(Number(v) * 100).toFixed(2)}%`; }
+function fmtPct(v) { const n = Number(v); return Number.isFinite(n) ? `${(n * 100).toFixed(2)}%` : '--'; }
 function fmtPrice(v) { return v === null || v === undefined ? '--' : fmtNum(v, 2); }
 function fmtDate(v) { if (!v) return '--'; try { return new Date(v).toLocaleString(); } catch { return v; } }
 function signedClass(v) { return Number(v) > 0 ? 'positive' : Number(v) < 0 ? 'negative' : ''; }
@@ -145,6 +151,16 @@ function buildKvHtml(label, value, extraClass='', changed=false) { return `<div 
 function renderKVs(targetId, rows) { document.getElementById(targetId).innerHTML = rows.map(([k, v, extraClass, changed]) => buildKvHtml(k, v, extraClass, changed)).join(''); }
 function setTextIfPresent(targetId, value) { const el = document.getElementById(targetId); if (el) el.textContent = value; return el; }
 function setHtmlIfPresent(targetId, value) { const el = document.getElementById(targetId); if (el) el.innerHTML = value; return el; }
+function bindClickIfPresent(targetId, handler) { const el = document.getElementById(targetId); if (el) el.addEventListener('click', handler); return el; }
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
+}
 function normalizeTimeframe(tf) { return TIMEFRAMES.includes(tf) ? tf : '1m'; }
 function optionValue(opt) { return typeof opt === 'object' ? opt.value : opt; }
 function optionLabel(opt) { return typeof opt === 'object' ? opt.label : opt; }
@@ -386,6 +402,159 @@ function applyEventsPatch(patch) {
     stateUi.lastEvents = existing.concat(appended).slice(-500);
   }
   stateUi.eventCursor = Math.max(Number(stateUi.eventCursor || 0), Number(patch.cursor || 0));
+}
+
+function compactAgentReason(agent) {
+  const evidence = Array.isArray(agent.evidence) && agent.evidence.length ? agent.evidence[0] : '';
+  return agent.summary || evidence || '--';
+}
+
+function normalizeAiDecisionRow(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+  const decision = row.decision && typeof row.decision === 'object' && !Array.isArray(row.decision)
+    ? Object.assign({}, row.decision)
+    : Object.assign({}, row);
+  if (!decision.reports && row.reports) decision.reports = row.reports;
+  if (!decision.decisionId && row.decisionId) decision.decisionId = row.decisionId;
+  if (!decision.tsUtc && row.tsUtc) decision.tsUtc = row.tsUtc;
+  if (!decision.latencySeconds && row.latencySeconds) decision.latencySeconds = row.latencySeconds;
+  return decision;
+}
+
+function aiDecisionGates(decision) {
+  return [
+    decision.gridAllowed === false ? 'Grid blocked' : (decision.gridAllowed === true ? 'Grid allowed' : ''),
+    decision.pauseNewBuys ? 'Pause buys' : '',
+    decision.allowSellsOnly ? 'Sells only' : '',
+    decision.reduceExposure ? 'Reduce exposure' : '',
+    decision.flattenRecommended ? 'Flatten' : '',
+    decision.dryRun ? 'Dry-run' : '',
+    decision.shadowMode ? 'Shadow' : '',
+    decision.stale ? 'Stale' : '',
+  ].filter(Boolean);
+}
+
+function aiStrategySummary(decision) {
+  const profile = decision.strategyProfile && typeof decision.strategyProfile === 'object' ? decision.strategyProfile : {};
+  const name = decision.strategyProfileName || profile.name || decision.recommendedMode || '--';
+  const status = decision.strategyProfileStatus || '';
+  const mode = decision.recommendedMode || '';
+  const bits = [name, status, mode && mode !== name ? mode : ''].filter(Boolean);
+  return bits.join(' · ') || '--';
+}
+
+function aiProfileSettings(decision) {
+  const profile = decision.strategyProfile && typeof decision.strategyProfile === 'object' ? decision.strategyProfile : {};
+  const spacing = profile.spacingPct ?? decision.recommendedSpacingPct;
+  const levels = profile.levels ?? decision.recommendedLevels;
+  const exposure = profile.maxExposurePct ?? decision.recommendedMaxExposurePct;
+  const perLevel = profile.perLevelUsdt;
+  return [
+    spacing != null ? `Spacing ${fmtPct(Number(spacing))}` : '',
+    levels != null ? `Levels ${levels}` : '',
+    exposure != null ? `Max exposure ${fmtPct(Number(exposure))}` : '',
+    perLevel != null ? `Per level ${fmtMoney(Number(perLevel))}` : '',
+  ].filter(Boolean).join(' · ');
+}
+
+function aiValidationSummary(decision) {
+  const report = decision.validationReport && typeof decision.validationReport === 'object' ? decision.validationReport : {};
+  if (!Object.keys(report).length) return '';
+  return [
+    report.passed === false ? 'Validation failed' : 'Validation passed',
+    report.mode || '',
+    report.sampleCount != null ? `${report.sampleCount} samples` : '',
+    report.error || '',
+  ].filter(Boolean).join(' · ');
+}
+
+function changeAiDecisionPage(direction) {
+  const rows = stateUi.lastAiDecisions || [];
+  const totalPages = Math.max(1, rows.length);
+  if (direction === 'first') stateUi.aiDecisionPage = 0;
+  if (direction === 'last') stateUi.aiDecisionPage = totalPages - 1;
+  if (direction === 'prev') stateUi.aiDecisionPage = Math.max(0, Number(stateUi.aiDecisionPage || 0) - 1);
+  if (direction === 'next') stateUi.aiDecisionPage = Math.min(totalPages - 1, Number(stateUi.aiDecisionPage || 0) + 1);
+  renderAiDecisions(rows, { preservePage: true });
+}
+
+function renderAiDecisionPager(totalPages) {
+  setTextIfPresent('ai-decisions-page-indicator', `Page ${stateUi.aiDecisionPage + 1} / ${totalPages}`);
+  ['first', 'prev'].forEach(name => {
+    const btn = document.getElementById(`ai-decisions-${name}-btn`);
+    if (btn) btn.disabled = stateUi.aiDecisionPage <= 0;
+  });
+  ['next', 'last'].forEach(name => {
+    const btn = document.getElementById(`ai-decisions-${name}-btn`);
+    if (btn) btn.disabled = stateUi.aiDecisionPage >= totalPages - 1;
+  });
+}
+
+function renderAiDecisions(decisions) {
+  const rows = (Array.isArray(decisions) ? decisions : []).map(normalizeAiDecisionRow).filter(Boolean);
+  stateUi.lastAiDecisions = rows.slice();
+  const body = document.getElementById('ai-decisions-body');
+  if (!body) return;
+  if (!rows.length) {
+    stateUi.aiDecisionPage = 0;
+    body.innerHTML = '<div class="ai-decision-why">No AI decisions yet</div>';
+    renderAiDecisionPager(1);
+    ['first', 'prev', 'next', 'last'].forEach(name => {
+      const btn = document.getElementById(`ai-decisions-${name}-btn`);
+      if (btn) btn.disabled = true;
+    });
+    return;
+  }
+  const totalPages = rows.length;
+  stateUi.aiDecisionPage = Math.max(0, Math.min(totalPages - 1, Number(stateUi.aiDecisionPage || 0)));
+  const decision = rows[stateUi.aiDecisionPage] || rows[0] || {};
+  const gates = aiDecisionGates(decision);
+  const profileSettings = aiProfileSettings(decision);
+  const validation = aiValidationSummary(decision);
+  const profileMeta = [
+    decision.strategyProfileId || '',
+    decision.researchSnapshotId ? `research ${decision.researchSnapshotId}` : '',
+  ].filter(Boolean).join(' · ');
+  const agentRows = (Array.isArray(decision.agents) ? decision.agents : [])
+    .filter(agent => agent && typeof agent === 'object' && !Array.isArray(agent));
+  const agents = agentRows.map(agent => `
+    <div class="ai-agent">
+      <div class="ai-agent-head"><span>${escapeHtml(String(agent.role || '').replace(/_/g, ' '))}</span><span>${escapeHtml(agent.recommendation || '--')}</span></div>
+      <div class="ai-agent-reason">${escapeHtml(compactAgentReason(agent))}</div>
+    </div>
+  `).join('');
+  const risks = (Array.isArray(decision.keyRisks) ? decision.keyRisks : [])
+    .slice(0, 4)
+    .map(risk => `<div>${escapeHtml(risk)}</div>`)
+    .join('');
+  body.innerHTML = `
+    <div class="ai-decision-topline">
+      <div class="ai-decision-field">
+        <div class="ai-decision-label">Time</div>
+        <div class="ai-decision-value">${escapeHtml(fmtDate(decision.tsUtc))}</div>
+        <div class="ai-decision-id">${escapeHtml(decision.decisionId || '--')}</div>
+      </div>
+      <div class="ai-decision-field">
+        <div class="ai-decision-label">Action</div>
+        <div class="ai-decision-value">${escapeHtml(decision.riskAction || '--')} · ${escapeHtml(gates.join(' · '))} · ${fmtPct(decision.confidence)}</div>
+        <div class="ai-decision-id">${escapeHtml(decision.regime || '--')} / ${escapeHtml(decision.directionBias || '--')}</div>
+      </div>
+      <div class="ai-decision-field">
+        <div class="ai-decision-label">Strategy</div>
+        <div class="ai-decision-value">${escapeHtml(aiStrategySummary(decision))}</div>
+        <div class="ai-decision-id">${escapeHtml(profileMeta || profileSettings || '--')}</div>
+      </div>
+    </div>
+    <div class="ai-decision-why">
+      <div class="ai-decision-label">Why</div>
+      <div class="ai-decision-why-text">${escapeHtml(decision.note || decision.error || decision.projectedImpact || '--')}</div>
+      ${profileSettings ? `<div class="ai-decision-id">${escapeHtml(profileSettings)}</div>` : ''}
+      ${validation ? `<div class="ai-decision-id">${escapeHtml(validation)}</div>` : ''}
+      ${risks ? `<div class="ai-decision-id">${risks}</div>` : ''}
+      ${agents ? `<div class="ai-agent-list">${agents}</div>` : ''}
+    </div>
+  `;
+  renderAiDecisionPager(totalPages);
 }
 
 function setOrderTab(tab) {
@@ -1424,6 +1593,9 @@ function applyLiveMarketPayload(data, renderChart = true) {
   } else if (Array.isArray(data.events)) {
     safeRender('events', () => renderEvents(data.events.slice().reverse()));
   }
+  if (Array.isArray(data.aiDecisions)) {
+    safeRender('aiDecisions', () => renderAiDecisions(data.aiDecisions));
+  }
   safeRender('orders', () => renderOrders());
   safeRender('status', () => renderLiveStatusFooter(status, state, runtime, data, grid));
   if (renderChart) {
@@ -1533,6 +1705,7 @@ async function refresh() {
     const runtime = data.runtime || {};
     const cumulative = data.cumulative || {};
     const events = data.events || [];
+    const aiDecisions = data.aiDecisions || [];
     const freshnessSeconds = data.freshnessSeconds;
     const serverTimeUtc = data.serverTimeUtc;
     const ohlcv = data.ohlcv || [];
@@ -1563,6 +1736,7 @@ async function refresh() {
     safeRender('summary', () => renderStickySummary(status, cumulative, runtime, grid));
     safeRender('status', () => renderLiveStatusFooter(status, state, runtime, data, grid));
     safeRender('events', () => renderEvents((events || []).slice().reverse()));
+    safeRender('aiDecisions', () => renderAiDecisions(aiDecisions));
     safeRender('orders', () => renderOrders());
     safeRender('timeframe', () => renderTimeframeControls());
     safeRender('intelligence', () => renderIntelligence(status, cumulative, runtime, intelligence));
