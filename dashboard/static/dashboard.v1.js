@@ -55,6 +55,8 @@ const stateUi = {
   lastEvents: [],
   lastAiDecisions: [],
   aiDecisionPage: 0,
+  activeAgentRole: '',
+  activeAgentDecisionId: '',
   eventPage: -1,
   eventPageSize: 5,
   lastOrders: [],
@@ -130,6 +132,14 @@ bindClickIfPresent('ai-decisions-first-btn', () => changeAiDecisionPage('first')
 bindClickIfPresent('ai-decisions-prev-btn', () => changeAiDecisionPage('prev'));
 bindClickIfPresent('ai-decisions-next-btn', () => changeAiDecisionPage('next'));
 bindClickIfPresent('ai-decisions-last-btn', () => changeAiDecisionPage('last'));
+bindClickIfPresent('agent-configure-btn', () => renderAgentChatNotice('Agent configuration is not enabled in this read-only recovery.'));
+bindClickIfPresent('agent-chat-send-btn', () => renderAgentChatNotice('Agent chat is not enabled in this read-only recovery.'));
+const agentSelect = document.getElementById('agent-select');
+if (agentSelect) agentSelect.addEventListener('change', () => setActiveAgentReport(agentSelect.value));
+const agentChatInput = document.getElementById('agent-chat-input');
+if (agentChatInput) agentChatInput.addEventListener('keydown', ev => {
+  if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') renderAgentChatNotice('Agent chat is not enabled in this read-only recovery.');
+});
 document.getElementById('orders-tab-open-btn').addEventListener('click', () => setOrderTab('open'));
 document.getElementById('orders-tab-history-btn').addEventListener('click', () => setOrderTab('history'));
 document.getElementById('orders-filter-buy-btn').addEventListener('click', () => setOrderFilter('BUY'));
@@ -409,6 +419,11 @@ function compactAgentReason(agent) {
   return agent.summary || evidence || '--';
 }
 
+function agentDisplayName(role) {
+  const text = String(role || 'portfolio_manager').replace(/_/g, ' ').trim();
+  return text ? text.replace(/\b\w/g, ch => ch.toUpperCase()) : 'Portfolio Manager';
+}
+
 function normalizeAiDecisionRow(row) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
   const decision = row.decision && typeof row.decision === 'object' && !Array.isArray(row.decision)
@@ -468,6 +483,65 @@ function aiValidationSummary(decision) {
   ].filter(Boolean).join(' · ');
 }
 
+function currentDecisionAgents(decision) {
+  return (Array.isArray(decision.agents) ? decision.agents : [])
+    .filter(agent => agent && typeof agent === 'object' && !Array.isArray(agent));
+}
+
+function renderAgentChatNotice(message) {
+  const target = document.getElementById('agent-chat-messages');
+  if (!target) return;
+  target.innerHTML = `
+    <div class="agent-message assistant">
+      <div class="agent-message-role">Read-only recovery</div>
+      <div class="agent-message-body">${escapeHtml(message)}</div>
+    </div>
+  `;
+}
+
+function renderAgentChatShell(decision = {}, agents = []) {
+  const select = document.getElementById('agent-select');
+  const threadSelect = document.getElementById('agent-thread-select');
+  const messages = document.getElementById('agent-chat-messages');
+  const proposals = document.getElementById('agent-proposals');
+  const input = document.getElementById('agent-chat-input');
+  const send = document.getElementById('agent-chat-send-btn');
+  if (threadSelect) threadSelect.innerHTML = '<option>New discussion</option>';
+  if (proposals) proposals.innerHTML = '';
+  if (input) input.value = '';
+  if (send) send.disabled = false;
+  const safeAgents = agents.length ? agents : [{ role: 'portfolio_manager', recommendation: '--', summary: '' }];
+  const decisionId = decision.decisionId || '';
+  if (!stateUi.activeAgentRole || stateUi.activeAgentDecisionId !== decisionId) {
+    stateUi.activeAgentRole = safeAgents[0].role || 'portfolio_manager';
+    stateUi.activeAgentDecisionId = decisionId;
+  }
+  if (select) {
+    select.innerHTML = safeAgents.map(agent => {
+      const role = String(agent.role || 'portfolio_manager');
+      return `<option value="${escapeHtml(role)}"${role === stateUi.activeAgentRole ? ' selected' : ''}>${escapeHtml(agentDisplayName(role))}</option>`;
+    }).join('');
+  }
+  if (!messages) return;
+  const active = safeAgents.find(agent => String(agent.role || '') === stateUi.activeAgentRole);
+  if (!active || !compactAgentReason(active) || compactAgentReason(active) === '--') {
+    messages.innerHTML = '<div class="agent-chat-empty">No discussion yet</div>';
+    return;
+  }
+  messages.innerHTML = `
+    <div class="agent-message assistant">
+      <div class="agent-message-role">${escapeHtml(agentDisplayName(active.role))}</div>
+      <div class="agent-message-body">${escapeHtml(compactAgentReason(active))}</div>
+    </div>
+  `;
+}
+
+function setActiveAgentReport(role) {
+  stateUi.activeAgentRole = String(role || '');
+  const decision = stateUi.lastAiDecisions[stateUi.aiDecisionPage] || {};
+  renderAgentChatShell(decision, currentDecisionAgents(decision));
+}
+
 function changeAiDecisionPage(direction) {
   const rows = stateUi.lastAiDecisions || [];
   const totalPages = Math.max(1, rows.length);
@@ -498,6 +572,7 @@ function renderAiDecisions(decisions) {
   if (!rows.length) {
     stateUi.aiDecisionPage = 0;
     body.innerHTML = '<div class="ai-decision-why">No AI decisions yet</div>';
+    renderAgentChatShell({}, []);
     renderAiDecisionPager(1);
     ['first', 'prev', 'next', 'last'].forEach(name => {
       const btn = document.getElementById(`ai-decisions-${name}-btn`);
@@ -518,10 +593,10 @@ function renderAiDecisions(decisions) {
   const agentRows = (Array.isArray(decision.agents) ? decision.agents : [])
     .filter(agent => agent && typeof agent === 'object' && !Array.isArray(agent));
   const agents = agentRows.map(agent => `
-    <div class="ai-agent">
+    <button class="ai-agent ${String(agent.role || '') === stateUi.activeAgentRole ? 'active' : ''}" type="button" data-agent-role="${escapeHtml(agent.role || '')}">
       <div class="ai-agent-head"><span>${escapeHtml(String(agent.role || '').replace(/_/g, ' '))}</span><span>${escapeHtml(agent.recommendation || '--')}</span></div>
       <div class="ai-agent-reason">${escapeHtml(compactAgentReason(agent))}</div>
-    </div>
+    </button>
   `).join('');
   const risks = (Array.isArray(decision.keyRisks) ? decision.keyRisks : [])
     .slice(0, 4)
@@ -554,6 +629,10 @@ function renderAiDecisions(decisions) {
       ${agents ? `<div class="ai-agent-list">${agents}</div>` : ''}
     </div>
   `;
+  body.querySelectorAll('[data-agent-role]').forEach(btn => {
+    btn.addEventListener('click', () => setActiveAgentReport(btn.getAttribute('data-agent-role') || ''));
+  });
+  renderAgentChatShell(decision, agentRows);
   renderAiDecisionPager(totalPages);
 }
 

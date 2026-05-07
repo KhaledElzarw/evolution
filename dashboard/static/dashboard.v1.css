@@ -123,7 +123,7 @@
     .regime-card { grid-column: span 16; min-height:350px; }
     .macro-card { grid-column: span 8; min-height:350px; }
     .events-card { grid-column: span 12; min-height:320px; }
-    .ai-decisions-card { grid-column: span 12; min-height:320px; }
+    .ai-decisions-card { grid-column: span 24; min-height:420px; }
     .orders-card { grid-column: span 24; min-height:360px; }
     .config-card { grid-column: span 24; min-height:360px; }
     .status-footer { grid-column: span 24; min-height:140px; }
@@ -176,9 +176,14 @@
     th, td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; font-size:.88rem; }
     th { position:sticky; top:0; background:rgba(16,22,41,.98); }
     body.light th { background:rgba(245,248,252,.98); }
-    .ai-decision-pane { min-width:0; min-height:0; display:flex; flex-direction:column; gap:10px; }
+    .ai-decision-chat-grid {
+      --ai-decision-split:58%;
+      display:grid; grid-template-columns:minmax(220px, var(--ai-decision-split)) minmax(220px, 1fr);
+      gap:12px; min-height:0; flex:1;
+    }
+    .ai-decision-pane, .agent-chat-pane { min-width:0; min-height:0; display:flex; flex-direction:column; gap:10px; }
     .ai-decision-detail {
-      flex:1; min-height:220px; border:1px solid var(--line); border-radius:8px;
+      flex:1; min-height:260px; border:1px solid var(--line); border-radius:8px;
       background:var(--panel-3); padding:14px; overflow:auto;
     }
     .ai-decision-topline { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px; margin-bottom:12px; }
@@ -192,9 +197,24 @@
     .ai-decision-why-text { font-size:.95rem; margin-bottom:12px; max-width:none; overflow-wrap:anywhere; }
     .ai-decision-id { color:var(--muted); font-size:.76rem; margin-top:4px; overflow-wrap:anywhere; }
     .ai-agent-list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; margin-top:10px; }
-    .ai-agent { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel); color:var(--text); text-align:left; }
+    .ai-agent { border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--panel); color:var(--text); text-align:left; font:inherit; cursor:pointer; }
+    .ai-agent:hover, .ai-agent.active { border-color:rgba(23,103,194,.36); transform:translateY(-1px); }
     .ai-agent-head { display:flex; justify-content:space-between; gap:8px; font-weight:850; margin-bottom:4px; }
     .ai-agent-reason { color:var(--muted); line-height:1.4; overflow-wrap:anywhere; }
+    .agent-chat-pane { border:1px solid var(--line); border-radius:8px; background:var(--panel-3); padding:12px; }
+    .agent-chat-toolbar { display:grid; grid-template-columns:1fr 1fr auto; gap:8px; align-items:center; }
+    .agent-chat-toolbar select, .agent-composer textarea {
+      width:100%; background:var(--panel); color:var(--text); border:1px solid var(--line);
+      border-radius:8px; padding:9px 10px; font:inherit;
+    }
+    .agent-chat-messages { flex:1; min-height:260px; max-height:520px; overflow:auto; display:flex; flex-direction:column; gap:9px; padding:4px; }
+    .agent-chat-empty { color:var(--muted); border:1px dashed var(--line); border-radius:8px; padding:18px; text-align:center; }
+    .agent-message { max-width:92%; border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:var(--panel-2); }
+    .agent-message.assistant { align-self:flex-start; }
+    .agent-message-role { color:var(--muted); text-transform:uppercase; font-size:.68rem; font-weight:900; margin-bottom:5px; }
+    .agent-message-body { line-height:1.45; overflow-wrap:anywhere; }
+    .agent-proposals { min-height:0; }
+    .agent-composer { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:end; border-top:1px solid var(--line); padding-top:10px; }
     .drag-hint, .snap-badge, .resize-handle { display:none; }
     .resize-handle {
       position:absolute; right:8px; bottom:8px; width:16px; height:16px; border-right:2px solid rgba(255,255,255,.28); border-bottom:2px solid rgba(255,255,255,.28);
@@ -254,9 +274,10 @@
       .trading-state-main, .metric { border-bottom:1px solid var(--line); }
       .control-strip, .regime-grid { grid-template-columns: 1fr; }
       .ai-decision-topline { grid-template-columns:1fr; }
+      .agent-chat-toolbar { grid-template-columns:1fr 1fr; }
     }
     @media (max-width: 720px) {
-      .command-strip, .control-strip, .config-grid, .calendar-row { grid-template-columns: 1fr; }
+      .command-strip, .control-strip, .config-grid, .calendar-row, .ai-decision-chat-grid, .agent-chat-toolbar, .agent-composer { grid-template-columns: 1fr; }
       .ai-agent-list { grid-template-columns:1fr; }
       .metric, .trading-state-main, .mini-control { border-right:0; border-bottom:1px solid var(--line); }
       .state-value { font-size:1.45rem; }

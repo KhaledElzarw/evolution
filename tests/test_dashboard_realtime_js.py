@@ -408,6 +408,8 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       'events-first-btn','events-prev-btn','events-next-btn','events-last-btn',
       'ai-decisions-first-btn','ai-decisions-prev-btn','ai-decisions-next-btn',
       'ai-decisions-last-btn','orders-tab-open-btn','orders-tab-history-btn',
+      'agent-select','agent-thread-select','agent-configure-btn','agent-chat-messages',
+      'agent-proposals','agent-chat-input','agent-chat-send-btn',
       'orders-filter-buy-btn','orders-filter-sell-btn','orders-first-btn',
       'orders-prev-btn','orders-next-btn','orders-last-btn','config-save-btn',
       'fresh-label','server-time','sticky-summary','trading-state-label',
@@ -541,6 +543,10 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
     assert.ok(body.innerHTML.includes('nested-&lt;bad&gt;'));
     assert.ok(body.innerHTML.includes('&lt;script&gt;bad&lt;/script&gt;'));
     assert.ok(!body.innerHTML.includes('<script>'));
+    assert.ok(elements.get('agent-select').innerHTML.includes('Risk Manager'));
+    assert.ok(elements.get('agent-chat-messages').innerHTML.includes('watch &lt;risk&gt;'));
+    assert.ok(!script.includes('/api/agent-chat'));
+    assert.ok(!script.includes('/api/agents'));
 
     assert.doesNotThrow(() => t.changeAiDecisionPage('next'));
     assert.ok(body.innerHTML.includes('flat-2'));

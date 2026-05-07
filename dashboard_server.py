@@ -276,19 +276,36 @@ HTML = r'''<!doctype html>
       </div>
     </section>
 
-    <section class="card ai-decisions-card" id="ai-decisions-card" data-default-col="13" data-default-span="12">
-      <div class="card-head"><h2>AI Decisions</h2><div class="card-actions"><span class="footer-note">read-only memory</span></div></div>
-      <div class="card-body ai-decision-pane">
-        <div class="pager">
-          <div class="pager-controls">
-            <button class="btn" id="ai-decisions-first-btn" type="button">First</button>
-            <button class="btn" id="ai-decisions-prev-btn" type="button">Prev</button>
-            <button class="btn" id="ai-decisions-next-btn" type="button">Next</button>
-            <button class="btn" id="ai-decisions-last-btn" type="button">Last</button>
+    <section class="card ai-decisions-card" id="ai-decisions-card" data-default-col="1" data-default-span="24">
+      <div class="card-head"><h2>AI Decisions</h2><div class="card-actions"><span class="footer-note">read-only agent memory</span></div></div>
+      <div class="card-body">
+        <div class="ai-decision-chat-grid">
+          <div class="ai-decision-pane">
+            <div class="pager">
+              <div class="pager-controls">
+                <button class="btn" id="ai-decisions-first-btn" type="button">First</button>
+                <button class="btn" id="ai-decisions-prev-btn" type="button">Prev</button>
+                <button class="btn" id="ai-decisions-next-btn" type="button">Next</button>
+                <button class="btn" id="ai-decisions-last-btn" type="button">Last</button>
+              </div>
+              <div class="page-indicator" id="ai-decisions-page-indicator">Page 1 / 1</div>
+            </div>
+            <div class="ai-decision-detail" id="ai-decisions-body"></div>
           </div>
-          <div class="page-indicator" id="ai-decisions-page-indicator">Page 1 / 1</div>
+          <div class="agent-chat-pane">
+            <div class="agent-chat-toolbar">
+              <select id="agent-select" title="Choose which agent report to inspect."></select>
+              <select id="agent-thread-select" title="Read-only discussion placeholder."><option>New discussion</option></select>
+              <button class="btn" id="agent-configure-btn" type="button" title="Agent configuration is not enabled in this read-only recovery.">Configure Agent</button>
+            </div>
+            <div class="agent-chat-messages" id="agent-chat-messages"></div>
+            <div class="agent-proposals" id="agent-proposals"></div>
+            <div class="agent-composer">
+              <textarea id="agent-chat-input" rows="3" placeholder="Message the agent..." title="Agent chat is not enabled in this read-only recovery."></textarea>
+              <button class="btn" id="agent-chat-send-btn" type="button" title="Agent chat is not enabled in this read-only recovery.">Send</button>
+            </div>
+          </div>
         </div>
-        <div class="ai-decision-detail" id="ai-decisions-body"></div>
       </div>
     </section>
 

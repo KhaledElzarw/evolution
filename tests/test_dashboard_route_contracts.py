@@ -169,6 +169,13 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
         "ai-decisions-prev-btn",
         "ai-decisions-next-btn",
         "ai-decisions-last-btn",
+        "agent-select",
+        "agent-thread-select",
+        "agent-configure-btn",
+        "agent-chat-messages",
+        "agent-proposals",
+        "agent-chat-input",
+        "agent-chat-send-btn",
     ]
     for element_id in required_ids:
         assert f'id="{element_id}"' in html
