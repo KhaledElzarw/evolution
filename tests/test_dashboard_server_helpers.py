@@ -383,15 +383,49 @@ def test_gst_server_time_and_macro_calendar_update_daily():
     naive_events = dashboard_server._macro_calendar_events(
         datetime(2026, 5, 7, 13, 0, 0)
     )
-    assert [event["date"] for event in events] == ["May 7"] * 5
-    assert naive_events[0]["date"] == "May 7"
-    assert [event["status"] for event in events] == [
-        "Completed",
-        "Completed",
-        "Completed",
-        "Upcoming",
-        "Upcoming",
+    assert len(events) > 3600
+    assert min(event["year"] for event in events) == 2025
+    assert max(event["year"] for event in events) == 2027
+    assert any(event["date"] == "May 7, 2026" for event in naive_events)
+    page_rows, total_pages, page, total_events = dashboard_server._macro_calendar_page(
+        events
+    )
+    assert page == 0
+    assert total_pages > 300
+    assert total_events == len(events)
+    assert len(page_rows) == 10
+    assert [event["status"] for event in page_rows[:5]] == ["Completed"] * 5
+    assert [event["status"] for event in page_rows[5:]] == ["Upcoming"] * 5
+    assert page_rows[0]["sortTs"] > page_rows[1]["sortTs"]
+    assert page_rows[5]["sortTs"] < page_rows[6]["sortTs"]
+
+    may_2026_us_data = [
+        event for event in events
+        if event["month"] == 5
+        and event["year"] == 2026
+        and event["title"] == "US Data Window"
     ]
+    filtered_rows, filtered_pages, _page, _total = dashboard_server._macro_calendar_page(
+        may_2026_us_data
+    )
+    assert filtered_pages >= 3
+    assert len(filtered_rows) == 10
+    assert {event["title"] for event in filtered_rows} == {"US Data Window"}
+    completed_only_rows, completed_only_pages, completed_only_page, completed_total = (
+        dashboard_server._macro_calendar_page(
+            [{"status": "Completed", "sortTs": idx} for idx in range(12)],
+            page=1,
+        )
+    )
+    empty_rows, empty_pages, empty_page, empty_total = dashboard_server._macro_calendar_page([])
+    assert [event["sortTs"] for event in completed_only_rows] == [1, 0]
+    assert completed_only_pages == 2
+    assert completed_only_page == 1
+    assert completed_total == 12
+    assert empty_rows == []
+    assert empty_pages == 1
+    assert empty_page == 0
+    assert empty_total == 0
 
     html = dashboard_server._render_macro_calendar(
         datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc)
@@ -399,8 +433,7 @@ def test_gst_server_time_and_macro_calendar_update_daily():
     assert "US Data Window" in html
     assert "Completed - US data window passed" in html
     assert "Upcoming - Watch ETF flow" in html
-    assert "May 1" not in html
-    assert html.count('class="calendar-row') == 5
+    assert html.count('class="calendar-row') == 10
 
 
 def test_format_and_server_render_helpers_cover_empty_and_value_rows():

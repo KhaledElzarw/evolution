@@ -6,6 +6,7 @@ import os
 import subprocess
 import time
 import threading
+from calendar import monthrange
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -71,6 +72,10 @@ NEWS_SOURCES = [
     ("The Block", "https://www.theblock.co/rss.xml"),
 ]
 NEWS_CARD_LIMIT = 5
+MACRO_CALENDAR_PAGE_SIZE = 10
+MACRO_CALENDAR_SIDE_SIZE = 5
+MACRO_CALENDAR_LOOKBACK_MONTHS = 12
+MACRO_CALENDAR_LOOKAHEAD_MONTHS = 12
 MACRO_CALENDAR_TEMPLATE = [
     {
         "title": "Asia Liquidity Open",
@@ -221,7 +226,7 @@ HTML = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tradebot Live Dashboard</title>
-  <link rel="stylesheet" href="/static/dashboard.v1.css?v=12">
+  <link rel="stylesheet" href="/static/dashboard.v1.css?v=13">
 </head>
 <body>
 <div class="wrap">
@@ -303,7 +308,23 @@ HTML = r'''<!doctype html>
 
     <section class="card macro-card" id="macro-card" data-default-col="17" data-default-span="8">
       <div class="card-head"><h2>Macro Calendar</h2><div class="card-actions"><span class="footer-note">Crypto impact</span></div></div>
-      <div class="card-body"><div class="calendar-list" id="macro-calendar"></div></div>
+      <div class="card-body">
+        <div class="calendar-toolbar">
+          <select id="macro-calendar-month-filter" aria-label="Macro calendar month"><option value="">All months</option></select>
+          <select id="macro-calendar-year-filter" aria-label="Macro calendar year"><option value="">All years</option></select>
+          <select id="macro-calendar-event-filter" aria-label="Macro calendar event"><option value="">All events</option></select>
+        </div>
+        <div class="calendar-list" id="macro-calendar"></div>
+        <div class="pager calendar-pager">
+          <div class="pager-controls">
+            <button class="btn" id="macro-calendar-first-btn" type="button">First</button>
+            <button class="btn" id="macro-calendar-prev-btn" type="button">Prev</button>
+            <button class="btn" id="macro-calendar-next-btn" type="button">Next</button>
+            <button class="btn" id="macro-calendar-last-btn" type="button">Last</button>
+          </div>
+          <div class="page-indicator" id="macro-calendar-page-indicator">Page 1 / 1</div>
+        </div>
+      </div>
     </section>
 
     <section class="card events-card" id="events-card" data-default-col="1" data-default-span="12">
@@ -393,7 +414,7 @@ HTML = r'''<!doctype html>
     </section>
   </div>
 </div>
-<script src="/static/dashboard.v1.js?v=12"></script>
+<script src="/static/dashboard.v1.js?v=13"></script>
 </body>
 </html>'''
 
@@ -1594,37 +1615,91 @@ def _render_impact_bars(level, color: str = "orange", size: int = 8) -> str:
     return '<div class="impact-bars">' + "".join(f'<span class="{"on " + cls if i < level_i else ""}"></span>' for i in range(size)) + "</div>"
 
 
+def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    month_index = (year * 12) + (month - 1) + delta
+    return month_index // 12, (month_index % 12) + 1
+
+
 def _macro_calendar_events(now: datetime | None = None) -> list[dict]:
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
     gst_now = current.astimezone(GST)
     events = []
-    for item in MACRO_CALENDAR_TEMPLATE:
-        event_gst = gst_now.replace(
-            hour=int(item["hour"]),
-            minute=int(item["minute"]),
-            second=0,
-            microsecond=0,
-        )
-        completed = gst_now >= event_gst
-        hour = event_gst.hour % 12 or 12
-        ampm = "AM" if event_gst.hour < 12 else "PM"
-        events.append({
-            "title": item["title"],
-            "date": f"{event_gst:%b} {event_gst.day}",
-            "time": f"{hour}:{event_gst:%M} {ampm} GST",
-            "impact": item["impact"],
-            "color": item["color"],
-            "status": "Completed" if completed else "Upcoming",
-            "summary": item["completed"] if completed else item["upcoming"],
-        })
+    for month_offset in range(
+        -MACRO_CALENDAR_LOOKBACK_MONTHS,
+        MACRO_CALENDAR_LOOKAHEAD_MONTHS + 1,
+    ):
+        year, month = _shift_month(gst_now.year, gst_now.month, month_offset)
+        for day in range(1, monthrange(year, month)[1] + 1):
+            for item in MACRO_CALENDAR_TEMPLATE:
+                event_gst = datetime(
+                    year,
+                    month,
+                    day,
+                    int(item["hour"]),
+                    int(item["minute"]),
+                    tzinfo=GST,
+                )
+                completed = gst_now >= event_gst
+                hour = event_gst.hour % 12 or 12
+                ampm = "AM" if event_gst.hour < 12 else "PM"
+                events.append({
+                    "title": item["title"],
+                    "year": event_gst.year,
+                    "month": event_gst.month,
+                    "monthName": event_gst.strftime("%b"),
+                    "date": f"{event_gst:%b} {event_gst.day}, {event_gst.year}",
+                    "time": f"{hour}:{event_gst:%M} {ampm} GST",
+                    "sortTs": event_gst.timestamp(),
+                    "impact": item["impact"],
+                    "color": item["color"],
+                    "status": "Completed" if completed else "Upcoming",
+                    "summary": item["completed"] if completed else item["upcoming"],
+                })
     return events
+
+
+def _macro_calendar_page(
+    events: list[dict],
+    page: int = 0,
+    page_size: int = MACRO_CALENDAR_PAGE_SIZE,
+) -> tuple[list[dict], int, int, int]:
+    completed = sorted(
+        [event for event in events if event.get("status") == "Completed"],
+        key=lambda event: float(event.get("sortTs") or 0),
+        reverse=True,
+    )
+    upcoming = sorted(
+        [event for event in events if event.get("status") == "Upcoming"],
+        key=lambda event: float(event.get("sortTs") or 0),
+    )
+    total_events = len(completed) + len(upcoming)
+    if completed and upcoming:
+        side_size = max(1, min(MACRO_CALENDAR_SIDE_SIZE, page_size // 2))
+        total_pages = max(
+            1,
+            math.ceil(len(completed) / side_size),
+            math.ceil(len(upcoming) / side_size),
+        )
+        page = max(0, min(total_pages - 1, int(page or 0)))
+        start = page * side_size
+        rows = completed[start:start + side_size] + upcoming[start:start + side_size]
+        return rows, total_pages, page, total_events
+
+    rows_source = completed or upcoming
+    total_pages = max(1, math.ceil(len(rows_source) / page_size))
+    page = max(0, min(total_pages - 1, int(page or 0)))
+    start = page * page_size
+    return rows_source[start:start + page_size], total_pages, page, total_events
 
 
 def _render_macro_calendar(now: datetime | None = None) -> str:
     rows = []
-    for idx, event in enumerate(_macro_calendar_events(now), start=1):
+    page_rows, _total_pages, page, _total_events = _macro_calendar_page(
+        _macro_calendar_events(now)
+    )
+    for idx, event in enumerate(page_rows, start=(page * MACRO_CALENDAR_PAGE_SIZE) + 1):
         status = str(event["status"])
         status_cls = "good" if status == "Completed" else "warn"
         dots = "".join(

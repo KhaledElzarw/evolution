@@ -10,6 +10,17 @@ const GRID_MODE_LABELS = { scalpy: 'Scalpy', fatty: 'Fatty', ai_optimized: 'Opti
 const LEGACY_OPTIMIZED_MODES = new Set(['flexy', 'ai_optimized']);
 const SERVER_TIME_ZONE = 'Asia/Dubai';
 const GST_OFFSET_MS = 4 * 60 * 60 * 1000;
+const MACRO_CALENDAR_PAGE_SIZE = 10;
+const MACRO_CALENDAR_SIDE_SIZE = 5;
+const MACRO_CALENDAR_LOOKBACK_MONTHS = 12;
+const MACRO_CALENDAR_LOOKAHEAD_MONTHS = 12;
+const MACRO_CALENDAR_TEMPLATES = [
+  ['Asia Liquidity Open', 8, 0, 2, '#1767c2', 'Watch Asia liquidity, early dollar tone, and grid spread pressure.', 'Asia session set the initial liquidity tone for BTC spread and inventory risk.'],
+  ['Europe Macro / Yields Check', 12, 0, 2, '#f7931a', 'Watch EUR/US yields and risk appetite before the US data window.', 'Europe macro flow updated rate-pressure context for the active grid.'],
+  ['US Data Window', 16, 30, 3, '#0d8a2f', 'Watch scheduled US releases and liquidity reaction around the event.', 'US data window passed; confirm whether volatility expanded or faded.'],
+  ['US Cash Open / ETF Flow', 17, 30, 3, '#d54545', 'Watch ETF flow, equity beta, and headline reaction during the cash open.', 'US cash open flow is in; reassess BTC trend pressure and exposure.'],
+  ['Daily Close Risk Review', 23, 45, 2, '#13a7b4', 'Review realized PnL, open exposure, and overnight grid risk.', 'Daily risk review completed; carry only exposure justified by the regime.'],
+];
 const INITIAL_QUERY = new URLSearchParams(window.location.search);
 function normalizeInitialTimeframe(tf) { return TIMEFRAMES.includes(tf) ? tf : '1m'; }
 const CONFIG_FIELDS = [
@@ -61,6 +72,11 @@ const stateUi = {
   lastEvents: [],
   lastAiDecisions: [],
   aiDecisionPage: 0,
+  macroCalendarPage: 0,
+  macroCalendarMonthFilter: '',
+  macroCalendarYearFilter: '',
+  macroCalendarEventFilter: '',
+  lastMacroCalendarServerTime: null,
   activeAgentRole: '',
   activeAgentDecisionId: '',
   eventPage: -1,
@@ -140,6 +156,16 @@ bindClickIfPresent('ai-decisions-first-btn', () => changeAiDecisionPage('first')
 bindClickIfPresent('ai-decisions-prev-btn', () => changeAiDecisionPage('prev'));
 bindClickIfPresent('ai-decisions-next-btn', () => changeAiDecisionPage('next'));
 bindClickIfPresent('ai-decisions-last-btn', () => changeAiDecisionPage('last'));
+bindClickIfPresent('macro-calendar-first-btn', () => changeMacroCalendarPage('first'));
+bindClickIfPresent('macro-calendar-prev-btn', () => changeMacroCalendarPage('prev'));
+bindClickIfPresent('macro-calendar-next-btn', () => changeMacroCalendarPage('next'));
+bindClickIfPresent('macro-calendar-last-btn', () => changeMacroCalendarPage('last'));
+const macroCalendarMonthFilter = document.getElementById('macro-calendar-month-filter');
+if (macroCalendarMonthFilter) macroCalendarMonthFilter.addEventListener('change', () => setMacroCalendarFilter('month', macroCalendarMonthFilter.value));
+const macroCalendarYearFilter = document.getElementById('macro-calendar-year-filter');
+if (macroCalendarYearFilter) macroCalendarYearFilter.addEventListener('change', () => setMacroCalendarFilter('year', macroCalendarYearFilter.value));
+const macroCalendarEventFilter = document.getElementById('macro-calendar-event-filter');
+if (macroCalendarEventFilter) macroCalendarEventFilter.addEventListener('change', () => setMacroCalendarFilter('event', macroCalendarEventFilter.value));
 bindClickIfPresent('agent-configure-btn', () => renderAgentChatNotice('Agent configuration is not enabled in this read-only recovery.'));
 bindClickIfPresent('agent-chat-send-btn', () => renderAgentChatNotice('Agent chat is not enabled in this read-only recovery.'));
 const agentSelect = document.getElementById('agent-select');
@@ -1116,45 +1142,162 @@ function renderRegime(status, runtime, intelligence) {
   if (updated && intelligence && intelligence.generatedAtUtc) updated.textContent = `AI refresh ${intelligence.generatedAtUtc.slice(11, 16)}`;
 }
 
+function shiftMonth(year, monthIndex, delta) {
+  const total = (year * 12) + monthIndex + delta;
+  return { year: Math.floor(total / 12), monthIndex: ((total % 12) + 12) % 12 };
+}
+
+function daysInMonth(year, monthIndex) {
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+}
+
 function macroCalendarEvents(serverTimeUtc) {
   const current = new Date(serverTimeUtc || Date.now());
   const nowUtcMs = Number.isNaN(current.getTime()) ? Date.now() : current.getTime();
   const gstNow = new Date(nowUtcMs + GST_OFFSET_MS);
   const year = gstNow.getUTCFullYear();
-  const month = gstNow.getUTCMonth();
-  const day = gstNow.getUTCDate();
-  const templates = [
-    ['Asia Liquidity Open', 8, 0, 2, '#1767c2', 'Watch Asia liquidity, early dollar tone, and grid spread pressure.', 'Asia session set the initial liquidity tone for BTC spread and inventory risk.'],
-    ['Europe Macro / Yields Check', 12, 0, 2, '#f7931a', 'Watch EUR/US yields and risk appetite before the US data window.', 'Europe macro flow updated rate-pressure context for the active grid.'],
-    ['US Data Window', 16, 30, 3, '#0d8a2f', 'Watch scheduled US releases and liquidity reaction around the event.', 'US data window passed; confirm whether volatility expanded or faded.'],
-    ['US Cash Open / ETF Flow', 17, 30, 3, '#d54545', 'Watch ETF flow, equity beta, and headline reaction during the cash open.', 'US cash open flow is in; reassess BTC trend pressure and exposure.'],
-    ['Daily Close Risk Review', 23, 45, 2, '#13a7b4', 'Review realized PnL, open exposure, and overnight grid risk.', 'Daily risk review completed; carry only exposure justified by the regime.'],
-  ];
-  return templates.map(([title, hour, minute, impact, color, upcoming, completed]) => {
-    const eventUtcMs = Date.UTC(year, month, day, hour - 4, minute, 0, 0);
-    const eventGst = new Date(eventUtcMs + GST_OFFSET_MS);
-    const done = nowUtcMs >= eventUtcMs;
-    const hour12 = hour % 12 || 12;
-    const ampm = hour < 12 ? 'AM' : 'PM';
-    return {
-      title,
-      date: eventGst.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-      time: `${hour12}:${String(minute).padStart(2, '0')} ${ampm} GST`,
-      impact,
-      color,
-      status: done ? 'Completed' : 'Upcoming',
-      summary: done ? completed : upcoming,
-    };
+  const monthIndex = gstNow.getUTCMonth();
+  const events = [];
+  for (let offset = -MACRO_CALENDAR_LOOKBACK_MONTHS; offset <= MACRO_CALENDAR_LOOKAHEAD_MONTHS; offset += 1) {
+    const shifted = shiftMonth(year, monthIndex, offset);
+    for (let day = 1; day <= daysInMonth(shifted.year, shifted.monthIndex); day += 1) {
+      MACRO_CALENDAR_TEMPLATES.forEach(([title, hour, minute, impact, color, upcoming, completed]) => {
+        const eventUtcMs = Date.UTC(shifted.year, shifted.monthIndex, day, hour - 4, minute, 0, 0);
+        const eventGst = new Date(eventUtcMs + GST_OFFSET_MS);
+        const done = nowUtcMs >= eventUtcMs;
+        const hour12 = hour % 12 || 12;
+        const ampm = hour < 12 ? 'AM' : 'PM';
+        events.push({
+          title,
+          year: eventGst.getUTCFullYear(),
+          month: eventGst.getUTCMonth() + 1,
+          monthName: eventGst.toLocaleDateString(undefined, { month: 'short' }),
+          date: eventGst.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
+          time: `${hour12}:${String(minute).padStart(2, '0')} ${ampm} GST`,
+          sortTs: eventUtcMs,
+          impact,
+          color,
+          status: done ? 'Completed' : 'Upcoming',
+          summary: done ? completed : upcoming,
+        });
+      });
+    }
+  }
+  return events;
+}
+
+function filteredMacroCalendarEvents(events) {
+  return (events || []).filter(ev => {
+    const monthOk = !stateUi.macroCalendarMonthFilter || String(ev.month) === String(stateUi.macroCalendarMonthFilter);
+    const yearOk = !stateUi.macroCalendarYearFilter || String(ev.year) === String(stateUi.macroCalendarYearFilter);
+    const eventOk = !stateUi.macroCalendarEventFilter || ev.title === stateUi.macroCalendarEventFilter;
+    return monthOk && yearOk && eventOk;
   });
+}
+
+function macroCalendarPageRows(events, page = stateUi.macroCalendarPage) {
+  const completed = (events || [])
+    .filter(ev => ev.status === 'Completed')
+    .sort((a, b) => Number(b.sortTs || 0) - Number(a.sortTs || 0));
+  const upcoming = (events || [])
+    .filter(ev => ev.status === 'Upcoming')
+    .sort((a, b) => Number(a.sortTs || 0) - Number(b.sortTs || 0));
+  if (completed.length && upcoming.length) {
+    const pages = Math.max(
+      1,
+      Math.ceil(completed.length / MACRO_CALENDAR_SIDE_SIZE),
+      Math.ceil(upcoming.length / MACRO_CALENDAR_SIDE_SIZE),
+    );
+    const pageIndex = Math.max(0, Math.min(pages - 1, Number(page || 0)));
+    const start = pageIndex * MACRO_CALENDAR_SIDE_SIZE;
+    return {
+      rows: completed.slice(start, start + MACRO_CALENDAR_SIDE_SIZE).concat(upcoming.slice(start, start + MACRO_CALENDAR_SIDE_SIZE)),
+      totalPages: pages,
+      page: pageIndex,
+      totalEvents: completed.length + upcoming.length,
+    };
+  }
+  const rowsSource = completed.length ? completed : upcoming;
+  const pages = Math.max(1, Math.ceil(rowsSource.length / MACRO_CALENDAR_PAGE_SIZE));
+  const pageIndex = Math.max(0, Math.min(pages - 1, Number(page || 0)));
+  const start = pageIndex * MACRO_CALENDAR_PAGE_SIZE;
+  return {
+    rows: rowsSource.slice(start, start + MACRO_CALENDAR_PAGE_SIZE),
+    totalPages: pages,
+    page: pageIndex,
+    totalEvents: rowsSource.length,
+  };
+}
+
+function setSelectOptions(selectId, options, selectedValue, emptyLabel) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  select.innerHTML = [
+    `<option value="">${escapeHtml(emptyLabel)}</option>`,
+    ...options.map(opt => `<option value="${escapeHtml(opt.value)}"${String(opt.value) === String(selectedValue) ? ' selected' : ''}>${escapeHtml(opt.label)}</option>`),
+  ].join('');
+}
+
+function populateMacroCalendarFilters(events) {
+  const months = Array.from(new Map((events || []).map(ev => [String(ev.month), {
+    value: String(ev.month),
+    label: ev.monthName || String(ev.month),
+  }])).values()).sort((a, b) => Number(a.value) - Number(b.value));
+  const years = Array.from(new Set((events || []).map(ev => ev.year))).sort((a, b) => a - b)
+    .map(year => ({ value: String(year), label: String(year) }));
+  const eventTypes = Array.from(new Set((events || []).map(ev => ev.title))).sort()
+    .map(title => ({ value: title, label: title }));
+  setSelectOptions('macro-calendar-month-filter', months, stateUi.macroCalendarMonthFilter, 'All months');
+  setSelectOptions('macro-calendar-year-filter', years, stateUi.macroCalendarYearFilter, 'All years');
+  setSelectOptions('macro-calendar-event-filter', eventTypes, stateUi.macroCalendarEventFilter, 'All events');
+}
+
+function setMacroCalendarFilter(kind, value) {
+  if (kind === 'month') stateUi.macroCalendarMonthFilter = value || '';
+  if (kind === 'year') stateUi.macroCalendarYearFilter = value || '';
+  if (kind === 'event') stateUi.macroCalendarEventFilter = value || '';
+  stateUi.macroCalendarPage = 0;
+  renderMacroCalendar(stateUi.lastMacroCalendarServerTime);
+}
+
+function renderMacroCalendarPager(totalPages, totalEvents) {
+  setTextIfPresent('macro-calendar-page-indicator', `Page ${stateUi.macroCalendarPage + 1} / ${totalPages} • ${totalEvents} events`);
+  ['first', 'prev'].forEach(name => {
+    const btn = document.getElementById(`macro-calendar-${name}-btn`);
+    if (btn) btn.disabled = stateUi.macroCalendarPage <= 0;
+  });
+  ['next', 'last'].forEach(name => {
+    const btn = document.getElementById(`macro-calendar-${name}-btn`);
+    if (btn) btn.disabled = stateUi.macroCalendarPage >= totalPages - 1;
+  });
+}
+
+function changeMacroCalendarPage(direction) {
+  const page = macroCalendarPageRows(filteredMacroCalendarEvents(macroCalendarEvents(stateUi.lastMacroCalendarServerTime))).totalPages;
+  if (direction === 'first') stateUi.macroCalendarPage = 0;
+  if (direction === 'last') stateUi.macroCalendarPage = page - 1;
+  if (direction === 'prev') stateUi.macroCalendarPage = Math.max(0, Number(stateUi.macroCalendarPage || 0) - 1);
+  if (direction === 'next') stateUi.macroCalendarPage = Math.min(page - 1, Number(stateUi.macroCalendarPage || 0) + 1);
+  renderMacroCalendar(stateUi.lastMacroCalendarServerTime);
 }
 
 function renderMacroCalendar(serverTimeUtc) {
   const target = document.getElementById('macro-calendar');
   if (!target) return;
-  const events = macroCalendarEvents(serverTimeUtc);
-  target.innerHTML = events.map((ev, idx) => `
+  stateUi.lastMacroCalendarServerTime = serverTimeUtc || stateUi.lastMacroCalendarServerTime || new Date().toISOString();
+  const events = macroCalendarEvents(stateUi.lastMacroCalendarServerTime);
+  populateMacroCalendarFilters(events);
+  const filtered = filteredMacroCalendarEvents(events);
+  const pageData = macroCalendarPageRows(filtered);
+  stateUi.macroCalendarPage = pageData.page;
+  if (!pageData.rows.length) {
+    target.innerHTML = '<div class="calendar-empty">No macro events match the filters</div>';
+    renderMacroCalendarPager(1, 0);
+    return;
+  }
+  target.innerHTML = pageData.rows.map((ev, idx) => `
     <div class="calendar-row ${ev.status.toLowerCase()}">
-      <div class="calendar-icon" style="background:${ev.color}">${idx + 1}</div>
+      <div class="calendar-icon" style="background:${ev.color}">${(pageData.page * MACRO_CALENDAR_PAGE_SIZE) + idx + 1}</div>
       <div class="calendar-main">
         <strong>${escapeHtml(ev.title)}</strong>
         <div class="calendar-summary">${escapeHtml(ev.status)} - ${escapeHtml(ev.summary)}</div>
@@ -1164,6 +1307,7 @@ function renderMacroCalendar(serverTimeUtc) {
       <div class="calendar-impact"><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots">${Array.from({ length: 3 }, (_, i) => `<span class="${i < ev.impact ? 'on' : ''}"></span>`).join('')}</div></div>
     </div>
   `).join('');
+  renderMacroCalendarPager(pageData.totalPages, pageData.totalEvents);
 }
 
 function getVisibleOhlcv(allOhlcv) {

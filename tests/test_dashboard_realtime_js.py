@@ -437,6 +437,10 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       'ai-decisions-body','ai-decisions-page-indicator','orders-body',
       'orders-page-indicator','timeframe-controls','news-stack','signal-table',
       'final-regime-title','final-regime-copy','regime-updated','macro-calendar',
+      'macro-calendar-month-filter','macro-calendar-year-filter',
+      'macro-calendar-event-filter','macro-calendar-first-btn',
+      'macro-calendar-prev-btn','macro-calendar-next-btn',
+      'macro-calendar-last-btn','macro-calendar-page-indicator',
       'config-form-grid','market-legend','hover-ohlcv','latest-candle',
       'market-chart','chart-stream-status','boot-error','top-timeframe'
     ];
@@ -536,6 +540,10 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
         stateUi,
         renderAiDecisions,
         changeAiDecisionPage,
+        renderMacroCalendar,
+        changeMacroCalendarPage,
+        macroCalendarEvents,
+        macroCalendarPageRows,
         applyLiveMarketPayload,
         refresh,
       };
@@ -597,6 +605,10 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
     assert.ok(elements.get('macro-calendar').innerHTML.includes('Completed -'));
     assert.ok(elements.get('macro-calendar').innerHTML.includes('Upcoming -'));
     assert.ok(!elements.get('macro-calendar').innerHTML.includes('May 1'));
+    assert.strictEqual((elements.get('macro-calendar').innerHTML.match(/class="calendar-row/g) || []).length, 10);
+    assert.ok(elements.get('macro-calendar-page-indicator').textContent.includes('Page 1 /'));
+    assert.ok(elements.get('macro-calendar-year-filter').innerHTML.includes('2025'));
+    assert.ok(elements.get('macro-calendar-year-filter').innerHTML.includes('2027'));
 
     (async () => {
       await assert.doesNotReject(async () => t.refresh());
@@ -604,6 +616,18 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       assert.ok(elements.get('server-time').textContent.includes('GST'));
       assert.ok(elements.get('macro-calendar').innerHTML.includes('May 7'));
       assert.ok(!elements.get('macro-calendar').innerHTML.includes('May 1'));
+      assert.strictEqual((elements.get('macro-calendar').innerHTML.match(/class="calendar-row/g) || []).length, 10);
+      assert.doesNotThrow(() => t.changeMacroCalendarPage('next'));
+      assert.ok(elements.get('macro-calendar-page-indicator').textContent.startsWith('Page 2 /'));
+      t.stateUi.macroCalendarMonthFilter = '5';
+      t.stateUi.macroCalendarYearFilter = '2026';
+      t.stateUi.macroCalendarEventFilter = 'US Data Window';
+      t.stateUi.macroCalendarPage = 0;
+      assert.doesNotThrow(() => t.renderMacroCalendar('2026-05-07T13:00:00+00:00'));
+      const filteredCalendar = elements.get('macro-calendar').innerHTML;
+      assert.strictEqual((filteredCalendar.match(/class="calendar-row/g) || []).length, 10);
+      assert.ok(filteredCalendar.includes('US Data Window'));
+      assert.ok(!filteredCalendar.includes('Asia Liquidity Open'));
       const renderedNews = elements.get('news-stack').innerHTML;
       assert.strictEqual((renderedNews.match(/class="news-card"/g) || []).length, 5);
       assert.ok(renderedNews.includes('Bitcoin raw rise'));
