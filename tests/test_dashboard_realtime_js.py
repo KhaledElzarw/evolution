@@ -42,6 +42,7 @@ def test_dashboard_boot_tolerates_cards_without_heads(tmp_path):
         className: '',
         classList: { toggle(){}, add(){}, remove(){} },
         addEventListener(){},
+        setAttribute(name, value){ this[name] = value; },
         appendChild(child){ this.children.push(child); },
         querySelector(sel){ return null; },
         querySelectorAll(){ return []; },
@@ -99,7 +100,15 @@ def test_dashboard_boot_tolerates_cards_without_heads(tmp_path):
       aiModels: [],
       aiEndpoints: [],
       aiEndpointModels: {},
-      intelligence: {},
+      intelligence: {
+        newsCards: [{ title: 'Cached item', source: 'Cache', sentiment: 'Neutral', impact: 3 }],
+        rawNews: [
+          { title: 'Bitcoin raw rise', source: 'RSS', publishedUtc: '2026-05-07T12:00:00+00:00' },
+          { title: 'Exchange hack loss', source: 'RSS' },
+          { title: 'Macro neutral', source: 'RSS' },
+          { title: 'ETF flow update', source: 'RSS' },
+        ],
+      },
       refreshMs: 1000,
       dashboardRefreshMs: 60000,
     };
@@ -198,6 +207,7 @@ def test_refresh_tolerates_missing_optional_refresh_controls(tmp_path):
         className: '',
         classList: { toggle(){}, add(){}, remove(){} },
         addEventListener(){},
+        setAttribute(name, value){ this[name] = value; },
         appendChild(child){ this.children.push(child); },
         querySelector(){ return null; },
         querySelectorAll(){ return []; },
@@ -266,14 +276,22 @@ def test_refresh_tolerates_missing_optional_refresh_controls(tmp_path):
       events: [],
       ohlcv: [],
       freshnessSeconds: 0.1,
-      serverTimeUtc: '2026-05-01T00:00:00+00:00',
+      serverTimeUtc: '2026-05-07T13:00:00+00:00',
       seq: 1,
       serverInstanceId: 'server-1',
       channel: 'dashboard',
       aiModels: [],
       aiEndpoints: [],
       aiEndpointModels: {},
-      intelligence: {},
+      intelligence: {
+        newsCards: [{ title: 'Cached item', source: 'Cache', sentiment: 'Neutral', impact: 3 }],
+        rawNews: [
+          { title: 'Bitcoin raw rise', source: 'RSS', publishedUtc: '2026-05-07T12:00:00+00:00' },
+          { title: 'Exchange hack loss', source: 'RSS' },
+          { title: 'Macro neutral', source: 'RSS' },
+          { title: 'ETF flow update', source: 'RSS' },
+        ],
+      },
       refreshMs: 1000,
       dashboardRefreshMs: 60000,
     };
@@ -394,6 +412,7 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
         className: '',
         classList: { toggle(){}, add(){}, remove(){} },
         addEventListener(){},
+        setAttribute(name, value){ this[name] = value; },
         appendChild(child){ this.children.push(child); },
         querySelector(){ return null; },
         querySelectorAll(){ return []; },
@@ -408,6 +427,8 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       'events-first-btn','events-prev-btn','events-next-btn','events-last-btn',
       'ai-decisions-first-btn','ai-decisions-prev-btn','ai-decisions-next-btn',
       'ai-decisions-last-btn','orders-tab-open-btn','orders-tab-history-btn',
+      'agent-select','agent-thread-select','agent-configure-btn','agent-chat-messages',
+      'agent-proposals','agent-chat-input','agent-chat-send-btn',
       'orders-filter-buy-btn','orders-filter-sell-btn','orders-first-btn',
       'orders-prev-btn','orders-next-btn','orders-last-btn','config-save-btn',
       'fresh-label','server-time','sticky-summary','trading-state-label',
@@ -439,14 +460,22 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       aiDecisions: [{ decisionId: 'refresh-row', riskAction: 'allow_grid', note: 'from refresh' }],
       ohlcv: [],
       freshnessSeconds: 0.1,
-      serverTimeUtc: '2026-05-01T00:00:00+00:00',
+      serverTimeUtc: '2026-05-07T13:00:00+00:00',
       seq: 2,
       serverInstanceId: 'server-1',
       channel: 'dashboard',
       aiModels: [],
       aiEndpoints: [],
       aiEndpointModels: {},
-      intelligence: {},
+      intelligence: {
+        newsCards: [{ title: 'Cached item', source: 'Cache', sentiment: 'Neutral', impact: 3 }],
+        rawNews: [
+          { title: 'Bitcoin raw rise', source: 'RSS', publishedUtc: '2026-05-07T12:00:00+00:00' },
+          { title: 'Exchange hack loss', source: 'RSS' },
+          { title: 'Macro neutral', source: 'RSS' },
+          { title: 'ETF flow update', source: 'RSS' },
+        ],
+      },
       refreshMs: 1000,
       dashboardRefreshMs: 60000,
     };
@@ -541,6 +570,10 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
     assert.ok(body.innerHTML.includes('nested-&lt;bad&gt;'));
     assert.ok(body.innerHTML.includes('&lt;script&gt;bad&lt;/script&gt;'));
     assert.ok(!body.innerHTML.includes('<script>'));
+    assert.ok(elements.get('agent-select').innerHTML.includes('Risk Manager'));
+    assert.ok(elements.get('agent-chat-messages').innerHTML.includes('watch &lt;risk&gt;'));
+    assert.ok(!script.includes('/api/agent-chat'));
+    assert.ok(!script.includes('/api/agents'));
 
     assert.doesNotThrow(() => t.changeAiDecisionPage('next'));
     assert.ok(body.innerHTML.includes('flat-2'));
@@ -555,13 +588,25 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       ...dashboardSample,
       channel: 'status',
       seq: 1,
+      serverTimeUtc: '2026-05-07T13:00:00+00:00',
       aiDecisions: [{ decisionId: 'live-row', riskAction: 'allow_grid', note: 'from live payload' }],
     }));
     assert.ok(body.innerHTML.includes('live-row'));
+    assert.ok(elements.get('server-time').textContent.includes('GST'));
+    assert.ok(elements.get('macro-calendar').innerHTML.includes('May 7'));
+    assert.ok(elements.get('macro-calendar').innerHTML.includes('Completed -'));
+    assert.ok(elements.get('macro-calendar').innerHTML.includes('Upcoming -'));
+    assert.ok(!elements.get('macro-calendar').innerHTML.includes('May 1'));
 
     (async () => {
       await assert.doesNotReject(async () => t.refresh());
       assert.ok(body.innerHTML.includes('refresh-row'));
+      assert.ok(elements.get('server-time').textContent.includes('GST'));
+      assert.ok(elements.get('macro-calendar').innerHTML.includes('May 7'));
+      assert.ok(!elements.get('macro-calendar').innerHTML.includes('May 1'));
+      const renderedNews = elements.get('news-stack').innerHTML;
+      assert.strictEqual((renderedNews.match(/class="news-card"/g) || []).length, 5);
+      assert.ok(renderedNews.includes('Bitcoin raw rise'));
     })().catch(err => {
       console.error(err);
       process.exit(1);
@@ -607,6 +652,7 @@ def test_summary_and_chart_renderers_tolerate_missing_optional_targets(tmp_path)
         className: '',
         classList: { toggle(){}, add(){}, remove(){} },
         addEventListener(){},
+        setAttribute(name, value){ this[name] = value; },
         appendChild(child){ this.children.push(child); },
         querySelector(){ return null; },
         querySelectorAll(){ return []; },
@@ -624,7 +670,7 @@ def test_summary_and_chart_renderers_tolerate_missing_optional_targets(tmp_path)
       'orders-tab-open-btn','orders-tab-history-btn','orders-filter-buy-btn',
       'orders-filter-sell-btn','orders-first-btn','orders-prev-btn',
       'orders-next-btn','orders-last-btn','config-save-btn','market-chart',
-      'boot-error'
+      'state-mode','boot-error'
     ].forEach(addElement);
 
     const sandbox = {
@@ -683,10 +729,33 @@ def test_summary_and_chart_renderers_tolerate_missing_optional_targets(tmp_path)
         stateUi,
         renderStickySummary,
         drawCandles,
+        dashboardModeLabel,
+        renderModeControl,
+        ensureLayoutControls,
+        applyCardHeight,
       };
     `, sandbox);
 
     const t = sandbox.__rendererTest;
+    assert.strictEqual(t.dashboardModeLabel({ gridMode: 'scalpy' }, true), 'Scalpy + Local AI');
+    assert.strictEqual(t.dashboardModeLabel({ gridMode: 'fatty' }, false), 'Fatty + Rules');
+    assert.strictEqual(t.dashboardModeLabel({ gridMode: 'flexy' }, true), 'Optimized AI');
+    assert.strictEqual(t.dashboardModeLabel({ gridMode: 'ai_optimized' }, false), 'Rules');
+    assert.strictEqual(t.dashboardModeLabel({ gridMode: 'legacy' }, true), 'Grid + Local AI');
+    t.stateUi.lastState = { aiEnabled: true, gridMode: 'flexy' };
+    assert.doesNotThrow(() => t.renderModeControl(true));
+    assert.ok(elements.get('state-mode').innerHTML.includes('Optimized AI'));
+    assert.ok(elements.get('state-mode').innerHTML.includes('disabled'));
+    const layoutCard = makeElement('layout-card');
+    layoutCard.querySelector = sel => layoutCard.children.find(child =>
+      (sel === '.snap-badge' && child.className === 'snap-badge') ||
+      (sel === '.resize-handle' && child.className === 'resize-handle')
+    ) || null;
+    assert.doesNotThrow(() => t.ensureLayoutControls(layoutCard));
+    assert.ok(layoutCard.children.some(child => child.className === 'snap-badge'));
+    assert.ok(layoutCard.children.some(child => child.className === 'resize-handle'));
+    t.applyCardHeight(layoutCard, 500);
+    assert.strictEqual(layoutCard.style.height, '500px');
     t.stateUi.lastState = { aiEnabled: true, gridMode: 'scalpy' };
     assert.doesNotThrow(() => t.renderStickySummary(
       {

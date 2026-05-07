@@ -116,6 +116,26 @@ def test_coerce_state_patch_rejects_flexy_grid_mode():
         raise AssertionError("expected ValueError")
 
 
+def test_dashboard_mode_label_hides_legacy_unsupported_modes():
+    assert (
+        dashboard_server.dashboard_mode_label({"gridMode": "scalpy", "aiEnabled": True})
+        == "Scalpy + Local AI"
+    )
+    assert (
+        dashboard_server.dashboard_mode_label({"gridMode": "fatty", "aiEnabled": False})
+        == "Fatty + Rules"
+    )
+    assert (
+        dashboard_server.dashboard_mode_label({"gridMode": "flexy", "aiEnabled": True})
+        == "Optimized AI"
+    )
+    assert dashboard_server.dashboard_mode_label({"gridMode": "ai_optimized", "aiEnabled": False}) == "Rules"
+    assert (
+        dashboard_server.dashboard_mode_label({"gridMode": "legacy", "aiEnabled": True})
+        == "Grid + Local AI"
+    )
+
+
 def test_read_ai_decisions_missing_and_empty_file(monkeypatch, tmp_path):
     decisions_path = tmp_path / "ai_decisions.jsonl"
     monkeypatch.setattr(dashboard_server, "AI_DECISIONS_PATH", decisions_path)

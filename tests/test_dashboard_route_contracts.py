@@ -140,8 +140,10 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
     html = body.decode("utf-8")
     assert status == 200
     assert headers["Content-Type"].startswith("text/html")
-    assert '<script src="/static/dashboard.v1.js?v=6"></script>' in html
-    assert 'href="/static/dashboard.v1.css?v=6"' in html
+    assert '<script src="/static/dashboard.v1.js?v=12"></script>' in html
+    assert 'href="/static/dashboard.v1.css?v=12"' in html
+    assert "Server Time" in html
+    assert "May 1 2026 UTC" not in html
     assert "BTCUSDT" in html
     required_ids = [
         "sticky-summary",
@@ -155,10 +157,8 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
         "state-exposure",
         "state-action",
         "market-chart",
-        "latest-candle",
         "market-legend",
         "chart-price-pill",
-        "chart-quote-line",
         "hover-ohlcv",
         "news-stack",
         "signal-table",
@@ -169,9 +169,17 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
         "ai-decisions-prev-btn",
         "ai-decisions-next-btn",
         "ai-decisions-last-btn",
+        "agent-select",
+        "agent-thread-select",
+        "agent-configure-btn",
+        "agent-chat-messages",
+        "agent-proposals",
+        "agent-chat-input",
+        "agent-chat-send-btn",
     ]
     for element_id in required_ids:
         assert f'id="{element_id}"' in html
+    assert 'class="candle-details" id="hover-ohlcv"' in html
 
 
 def test_static_route_serves_dashboard_js_asset(monkeypatch, tmp_path):
@@ -183,14 +191,16 @@ def test_static_route_serves_dashboard_js_asset(monkeypatch, tmp_path):
 
     server = _start_server()
     try:
-        status, headers, body = _request(server, "/static/dashboard.v1.js?v=6")
+        status, headers, body = _request(server, "/static/dashboard.v1.js?v=12")
     finally:
         server.shutdown()
         server.server_close()
 
     assert status == 200
     assert headers["Content-Type"].startswith("application/javascript")
-    assert headers["Cache-Control"] == "public, max-age=300"
+    assert headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    assert headers["Pragma"] == "no-cache"
+    assert headers["Expires"] == "0"
     assert body == b"console.log('dashboard');\n"
 
 

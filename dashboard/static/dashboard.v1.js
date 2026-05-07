@@ -4,6 +4,12 @@ const MIN_SPAN = 6;
 const TIMEFRAMES = ['1s', '1m', '5m', '30m', '1h', '1d', '1w', '1M'];
 const TIMEFRAME_LABELS = { '1s': '1 Second', '1m': '1 Minute', '5m': '5 Minutes', '30m': '30 Minutes', '1h': '1 Hour', '1d': '1 Day', '1w': '1 Week', '1M': '1 Month' };
 const DEFAULT_LIMITS = { '1s': 240, '1m': 180, '5m': 180, '30m': 180, '1h': 240, '1d': 180, '1w': 120, '1M': 120 };
+const GRID_MODES = ['scalpy', 'fatty'];
+const MODE_CONTROL_MODES = ['scalpy', 'fatty', 'ai_optimized'];
+const GRID_MODE_LABELS = { scalpy: 'Scalpy', fatty: 'Fatty', ai_optimized: 'Optimized AI' };
+const LEGACY_OPTIMIZED_MODES = new Set(['flexy', 'ai_optimized']);
+const SERVER_TIME_ZONE = 'Asia/Dubai';
+const GST_OFFSET_MS = 4 * 60 * 60 * 1000;
 const INITIAL_QUERY = new URLSearchParams(window.location.search);
 function normalizeInitialTimeframe(tf) { return TIMEFRAMES.includes(tf) ? tf : '1m'; }
 const CONFIG_FIELDS = [
@@ -14,7 +20,7 @@ const CONFIG_FIELDS = [
   { key: 'positionCapPct', label: 'Position Cap %', type: 'number', step: '0.01' },
   { key: 'maxDailyLossPct', label: 'Max Daily Loss %', type: 'number', step: '0.01' },
   { key: 'maxTradesPerDay', label: 'Max Trades / Day', type: 'number', step: '1' },
-  { key: 'gridMode', label: 'Grid Mode', type: 'select', options: ['scalpy', 'fatty'] },
+  { key: 'gridMode', label: 'Grid Mode', type: 'select', options: GRID_MODES },
   { key: 'gridLevels', label: 'Grid Levels', type: 'number', step: '1' },
   { key: 'gridSpacingPct', label: 'Grid Spacing %', type: 'number', step: '0.001' },
   { key: 'gridMaxExposurePct', label: 'Grid Max Exposure %', type: 'number', step: '0.01' },
@@ -55,6 +61,8 @@ const stateUi = {
   lastEvents: [],
   lastAiDecisions: [],
   aiDecisionPage: 0,
+  activeAgentRole: '',
+  activeAgentDecisionId: '',
   eventPage: -1,
   eventPageSize: 5,
   lastOrders: [],
@@ -108,6 +116,8 @@ const stateUi = {
   historyOffset: Number(localStorage.getItem('tradebot-chart-history-offset') || 0),
   panOffset: Number(localStorage.getItem('tradebot-chart-pan-offset') || 0),
   visibleOhlcv: [],
+  chartHoverIndex: null,
+  chartDragState: null,
 };
 
 function setTheme(theme) {
@@ -130,6 +140,14 @@ bindClickIfPresent('ai-decisions-first-btn', () => changeAiDecisionPage('first')
 bindClickIfPresent('ai-decisions-prev-btn', () => changeAiDecisionPage('prev'));
 bindClickIfPresent('ai-decisions-next-btn', () => changeAiDecisionPage('next'));
 bindClickIfPresent('ai-decisions-last-btn', () => changeAiDecisionPage('last'));
+bindClickIfPresent('agent-configure-btn', () => renderAgentChatNotice('Agent configuration is not enabled in this read-only recovery.'));
+bindClickIfPresent('agent-chat-send-btn', () => renderAgentChatNotice('Agent chat is not enabled in this read-only recovery.'));
+const agentSelect = document.getElementById('agent-select');
+if (agentSelect) agentSelect.addEventListener('change', () => setActiveAgentReport(agentSelect.value));
+const agentChatInput = document.getElementById('agent-chat-input');
+if (agentChatInput) agentChatInput.addEventListener('keydown', ev => {
+  if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') renderAgentChatNotice('Agent chat is not enabled in this read-only recovery.');
+});
 document.getElementById('orders-tab-open-btn').addEventListener('click', () => setOrderTab('open'));
 document.getElementById('orders-tab-history-btn').addEventListener('click', () => setOrderTab('history'));
 document.getElementById('orders-filter-buy-btn').addEventListener('click', () => setOrderFilter('BUY'));
@@ -145,6 +163,26 @@ function fmtMoney(v) { return v === null || v === undefined ? '--' : `$${fmtNum(
 function fmtPct(v) { const n = Number(v); return Number.isFinite(n) ? `${(n * 100).toFixed(2)}%` : '--'; }
 function fmtPrice(v) { return v === null || v === undefined ? '--' : fmtNum(v, 2); }
 function fmtDate(v) { if (!v) return '--'; try { return new Date(v).toLocaleString(); } catch { return v; } }
+function fmtServerTime(v) {
+  if (!v) return '--';
+  const date = new Date(v);
+  if (Number.isNaN(date.getTime())) return String(v);
+  try {
+    const rendered = new Intl.DateTimeFormat(undefined, {
+      timeZone: SERVER_TIME_ZONE,
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    }).format(date);
+    return `${rendered} GST`;
+  } catch {
+    return `${fmtDate(v)} GST`;
+  }
+}
 function signedClass(v) { return Number(v) > 0 ? 'positive' : Number(v) < 0 ? 'negative' : ''; }
 function humanAge(seconds) { if (seconds == null) return '--'; if (seconds < 60) return `${seconds.toFixed(2)}s`; if (seconds < 3600) return `${(seconds/60).toFixed(1)}m`; return `${(seconds/3600).toFixed(1)}h`; }
 function buildKvHtml(label, value, extraClass='', changed=false) { return `<div class="kv ${changed ? 'changed' : ''}"><div class="k">${label}</div><div class="v ${extraClass}">${value}</div></div>`; }
@@ -201,7 +239,59 @@ function acceptPayloadSeq(channel, seq, instanceId = null) {
   stateUi.lastSeq[key] = next;
   return true;
 }
-function getLayoutKey() { return 'tradebot-layout-v5'; }
+function getLayoutKey() { return 'tradebot-layout-v7'; }
+function gridModeLabel(mode) { return GRID_MODE_LABELS[mode] || mode; }
+function dashboardModeKey(state) {
+  const mode = String((state && state.gridMode) || '').trim().toLowerCase();
+  if (GRID_MODES.includes(mode)) return mode;
+  if (LEGACY_OPTIMIZED_MODES.has(mode)) return 'ai_optimized';
+  return 'grid';
+}
+function dashboardModeLabel(state, aiEnabled) {
+  const suffix = aiEnabled ? 'Local AI' : 'Rules';
+  const mode = dashboardModeKey(state);
+  if (GRID_MODES.includes(mode)) return `${GRID_MODE_LABELS[mode]} + ${suffix}`;
+  if (mode === 'ai_optimized') return aiEnabled ? 'Optimized AI' : 'Rules';
+  return `Grid + ${suffix}`;
+}
+function renderModeControl(aiEnabled) {
+  const el = document.getElementById('state-mode');
+  if (!el) return;
+  const current = dashboardModeKey(stateUi.lastState || {});
+  el.innerHTML = `
+    <span class="mode-status">${aiEnabled ? 'Local AI' : 'Rules'}</span>
+    <span class="mode-switch" role="group" aria-label="Grid mode">
+      ${MODE_CONTROL_MODES.map(mode => {
+        const active = mode === current;
+        const enabled = GRID_MODES.includes(mode);
+        return `<button class="mode-option ${active ? 'active' : ''}" type="button" data-grid-mode="${mode}" aria-pressed="${active ? 'true' : 'false'}"${enabled ? '' : ' disabled'}>${gridModeLabel(mode)}</button>`;
+      }).join('')}
+    </span>
+  `;
+  el.querySelectorAll('[data-grid-mode]').forEach(btn => {
+    if (!btn.disabled) btn.addEventListener('click', () => setGridMode(btn.dataset.gridMode));
+  });
+}
+function persistChartViewport() {
+  localStorage.setItem('tradebot-chart-limit', String(Math.max(30, Math.min(1000, Number(stateUi.candleLimit || 180)))));
+  localStorage.setItem('tradebot-chart-pan-offset', String(Math.max(0, Number(stateUi.panOffset || 0))));
+}
+function setCandleDetails(candle) {
+  const el = document.getElementById('hover-ohlcv');
+  if (!el) return;
+  if (!candle) {
+    el.innerHTML = '<strong>Candle</strong><span>--</span>';
+    return;
+  }
+  const ts = candle.openTimeMs ? `${new Date(candle.openTimeMs).toLocaleString()}  ` : '';
+  el.innerHTML = `<strong>Candle</strong><span>${ts}O ${fmtPrice(candle.open)}  H ${fmtPrice(candle.high)}  L ${fmtPrice(candle.low)}  C ${fmtPrice(candle.close)}  Vol ${fmtMoney(candle.volumeUsdt)}</span>`;
+}
+function eventTimeMs(ev) {
+  const raw = ev && (ev.tsUtc || ev.ts || ev.time || ev.timestamp);
+  if (!raw) return null;
+  const parsed = typeof raw === 'number' ? raw : Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 function chartPairLabel(symbol = chartSymbol()) {
   const raw = String(symbol || 'BTCUSDT').toUpperCase();
   if (raw.endsWith('USDT')) return `${raw.slice(0, -4)}/USD`;
@@ -303,7 +393,7 @@ function renderStickySummary(status, cumulative, runtime, grid) {
     }
   }
   setTextIfPresent('trading-state-label', stateLabel);
-  setTextIfPresent('state-mode', `${String((stateUi.lastState && stateUi.lastState.gridMode) || 'grid')} + ${aiEnabled ? 'Local AI' : 'Rules'}`);
+  renderModeControl(aiEnabled);
   const riskEl = setTextIfPresent('state-risk', exposure > 0.85 ? 'High' : (exposure > 0.55 ? 'Normal' : 'Light'));
   if (riskEl) riskEl.className = exposure > 0.85 ? 'negative' : 'positive';
   setTextIfPresent('state-exposure', fmtPct(exposure));
@@ -341,6 +431,36 @@ async function toggleAiAssist() {
     await refresh();
   } finally {
     btn.disabled = false;
+  }
+}
+
+async function setGridMode(mode) {
+  const nextMode = GRID_MODES.includes(String(mode)) ? String(mode) : null;
+  if (!nextMode) {
+    renderModeControl(!(stateUi.lastState && stateUi.lastState.aiEnabled === false));
+    return;
+  }
+  const previousState = Object.assign({}, stateUi.lastState || {});
+  const previousMode = previousState.gridMode;
+  stateUi.lastState = Object.assign({}, previousState, { gridMode: nextMode });
+  renderModeControl(stateUi.lastState.aiEnabled !== false);
+  const modeEl = document.getElementById('state-mode');
+  if (modeEl) modeEl.classList.add('saving');
+  try {
+    const res = await fetch(apiPath('/api/config'), {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ gridMode: nextMode }),
+    });
+    if (!res.ok) throw new Error(await responseErrorMessage(res, `mode save failed: ${res.status}`));
+    await refresh();
+  } catch (err) {
+    stateUi.lastState = Object.assign({}, previousState, { gridMode: previousMode });
+    renderModeControl(stateUi.lastState.aiEnabled !== false);
+    showBootError(err && err.message ? err.message : 'mode save failed');
+  } finally {
+    const finalEl = document.getElementById('state-mode');
+    if (finalEl) finalEl.classList.remove('saving');
   }
 }
 
@@ -409,6 +529,11 @@ function compactAgentReason(agent) {
   return agent.summary || evidence || '--';
 }
 
+function agentDisplayName(role) {
+  const text = String(role || 'portfolio_manager').replace(/_/g, ' ').trim();
+  return text ? text.replace(/\b\w/g, ch => ch.toUpperCase()) : 'Portfolio Manager';
+}
+
 function normalizeAiDecisionRow(row) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
   const decision = row.decision && typeof row.decision === 'object' && !Array.isArray(row.decision)
@@ -468,6 +593,65 @@ function aiValidationSummary(decision) {
   ].filter(Boolean).join(' · ');
 }
 
+function currentDecisionAgents(decision) {
+  return (Array.isArray(decision.agents) ? decision.agents : [])
+    .filter(agent => agent && typeof agent === 'object' && !Array.isArray(agent));
+}
+
+function renderAgentChatNotice(message) {
+  const target = document.getElementById('agent-chat-messages');
+  if (!target) return;
+  target.innerHTML = `
+    <div class="agent-message assistant">
+      <div class="agent-message-role">Read-only recovery</div>
+      <div class="agent-message-body">${escapeHtml(message)}</div>
+    </div>
+  `;
+}
+
+function renderAgentChatShell(decision = {}, agents = []) {
+  const select = document.getElementById('agent-select');
+  const threadSelect = document.getElementById('agent-thread-select');
+  const messages = document.getElementById('agent-chat-messages');
+  const proposals = document.getElementById('agent-proposals');
+  const input = document.getElementById('agent-chat-input');
+  const send = document.getElementById('agent-chat-send-btn');
+  if (threadSelect) threadSelect.innerHTML = '<option>New discussion</option>';
+  if (proposals) proposals.innerHTML = '';
+  if (input) input.value = '';
+  if (send) send.disabled = false;
+  const safeAgents = agents.length ? agents : [{ role: 'portfolio_manager', recommendation: '--', summary: '' }];
+  const decisionId = decision.decisionId || '';
+  if (!stateUi.activeAgentRole || stateUi.activeAgentDecisionId !== decisionId) {
+    stateUi.activeAgentRole = safeAgents[0].role || 'portfolio_manager';
+    stateUi.activeAgentDecisionId = decisionId;
+  }
+  if (select) {
+    select.innerHTML = safeAgents.map(agent => {
+      const role = String(agent.role || 'portfolio_manager');
+      return `<option value="${escapeHtml(role)}"${role === stateUi.activeAgentRole ? ' selected' : ''}>${escapeHtml(agentDisplayName(role))}</option>`;
+    }).join('');
+  }
+  if (!messages) return;
+  const active = safeAgents.find(agent => String(agent.role || '') === stateUi.activeAgentRole);
+  if (!active || !compactAgentReason(active) || compactAgentReason(active) === '--') {
+    messages.innerHTML = '<div class="agent-chat-empty">No discussion yet</div>';
+    return;
+  }
+  messages.innerHTML = `
+    <div class="agent-message assistant">
+      <div class="agent-message-role">${escapeHtml(agentDisplayName(active.role))}</div>
+      <div class="agent-message-body">${escapeHtml(compactAgentReason(active))}</div>
+    </div>
+  `;
+}
+
+function setActiveAgentReport(role) {
+  stateUi.activeAgentRole = String(role || '');
+  const decision = stateUi.lastAiDecisions[stateUi.aiDecisionPage] || {};
+  renderAgentChatShell(decision, currentDecisionAgents(decision));
+}
+
 function changeAiDecisionPage(direction) {
   const rows = stateUi.lastAiDecisions || [];
   const totalPages = Math.max(1, rows.length);
@@ -498,6 +682,7 @@ function renderAiDecisions(decisions) {
   if (!rows.length) {
     stateUi.aiDecisionPage = 0;
     body.innerHTML = '<div class="ai-decision-why">No AI decisions yet</div>';
+    renderAgentChatShell({}, []);
     renderAiDecisionPager(1);
     ['first', 'prev', 'next', 'last'].forEach(name => {
       const btn = document.getElementById(`ai-decisions-${name}-btn`);
@@ -518,10 +703,10 @@ function renderAiDecisions(decisions) {
   const agentRows = (Array.isArray(decision.agents) ? decision.agents : [])
     .filter(agent => agent && typeof agent === 'object' && !Array.isArray(agent));
   const agents = agentRows.map(agent => `
-    <div class="ai-agent">
+    <button class="ai-agent ${String(agent.role || '') === stateUi.activeAgentRole ? 'active' : ''}" type="button" data-agent-role="${escapeHtml(agent.role || '')}">
       <div class="ai-agent-head"><span>${escapeHtml(String(agent.role || '').replace(/_/g, ' '))}</span><span>${escapeHtml(agent.recommendation || '--')}</span></div>
       <div class="ai-agent-reason">${escapeHtml(compactAgentReason(agent))}</div>
-    </div>
+    </button>
   `).join('');
   const risks = (Array.isArray(decision.keyRisks) ? decision.keyRisks : [])
     .slice(0, 4)
@@ -554,6 +739,10 @@ function renderAiDecisions(decisions) {
       ${agents ? `<div class="ai-agent-list">${agents}</div>` : ''}
     </div>
   `;
+  body.querySelectorAll('[data-agent-role]').forEach(btn => {
+    btn.addEventListener('click', () => setActiveAgentReport(btn.getAttribute('data-agent-role') || ''));
+  });
+  renderAgentChatShell(decision, agentRows);
   renderAiDecisionPager(totalPages);
 }
 
@@ -709,19 +898,67 @@ function impactBars(level, color = 'orange') {
   return `<div class="impact-bars">${Array.from({ length: 8 }, (_, i) => `<span class="${i < level ? `on ${color}` : ''}"></span>`).join('')}</div>`;
 }
 
+function newsSentiment(title) {
+  const text = String(title || '').toLowerCase();
+  if (['surge', 'inflow', 'rally', 'rise', 'gain'].some(word => text.includes(word))) return 'Bullish';
+  if (['fall', 'drop', 'outflow', 'hack', 'loss'].some(word => text.includes(word))) return 'Bearish';
+  return 'Neutral';
+}
+
+function normalizedNewsCards(intelligence) {
+  const cards = Array.isArray(intelligence && intelligence.newsCards)
+    ? intelligence.newsCards.filter(card => card && typeof card === 'object' && !Array.isArray(card)).map(card => ({ ...card }))
+    : [];
+  const seen = new Set(cards.map(card => String(card.title || '').trim().toLowerCase()));
+  const rawNews = Array.isArray(intelligence && intelligence.rawNews) ? intelligence.rawNews : [];
+  rawNews
+    .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+    .forEach(item => {
+      const title = String(item.title || 'Crypto market update').trim();
+      const key = title.toLowerCase();
+      if (cards.length < 5 && key && !seen.has(key)) {
+        const sentiment = newsSentiment(title);
+        cards.push({
+          title,
+          source: item.source || 'RSS',
+          age: String(item.publishedUtc || 'latest').slice(0, 16).replace('T', ' '),
+          sentiment,
+          impact: title.toLowerCase().includes('bitcoin') || title.toLowerCase().includes('btc') ? 6 : 4,
+          url: item.url || '',
+        });
+        seen.add(key);
+      }
+    });
+  while (cards.length < 5) {
+    cards.push({
+      title: 'Awaiting fresh crypto headlines',
+      source: 'Local',
+      age: '30m refresh',
+      sentiment: 'Neutral',
+      impact: 3,
+      url: '',
+    });
+  }
+  return cards.slice(0, 5);
+}
+
 function renderIntelligence(status, cumulative, runtime, intelligence) {
-  if (intelligence && intelligence.newsCards && intelligence.newsCards.length) {
-    document.getElementById('news-stack').innerHTML = intelligence.newsCards.slice(0, 4).map(card => {
+  const hasIntelligenceNews = intelligence
+    && ((Array.isArray(intelligence.newsCards) && intelligence.newsCards.length)
+      || (Array.isArray(intelligence.rawNews) && intelligence.rawNews.length));
+  if (hasIntelligenceNews) {
+    const intelligenceCards = normalizedNewsCards(intelligence);
+    document.getElementById('news-stack').innerHTML = intelligenceCards.map(card => {
       const sentiment = card.sentiment || 'Neutral';
       const color = sentiment.toLowerCase() === 'bullish' ? 'green' : 'orange';
       const url = card.url || '';
-      const title = url ? `<a href="${url}" target="_blank" rel="noreferrer">${card.title || 'Crypto market update'}</a>` : (card.title || 'Crypto market update');
+      const title = url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(card.title || 'Crypto market update')}</a>` : escapeHtml(card.title || 'Crypto market update');
       return `
         <div class="news-card">
           <div class="news-title">${title}</div>
           <div class="news-row">
-            <div><span class="source-chip">${card.source || 'Local AI'}</span> <span class="news-meta">${card.age || '30m refresh'}</span></div>
-            <span class="sentiment-chip ${color === 'green' ? 'bullish' : 'neutral'}">${sentiment}</span>
+            <div><span class="source-chip">${escapeHtml(card.source || 'Local AI')}</span> <span class="news-meta">${escapeHtml(card.age || '30m refresh')}</span></div>
+            <span class="sentiment-chip ${color === 'green' ? 'bullish' : 'neutral'}">${escapeHtml(sentiment)}</span>
           </div>
           <div class="news-meta" style="margin-bottom:6px">Impact</div>
           ${impactBars(card.impact || 4, color)}
@@ -760,6 +997,22 @@ function renderIntelligence(status, cumulative, runtime, intelligence) {
       sentiment: Number(realized + unreal) >= 0 ? 'Bullish' : 'Neutral',
       color: Number(realized + unreal) >= 0 ? 'green' : 'orange',
       impact: Math.min(8, Math.max(2, Math.round(Math.abs(realized + unreal) / 25) + 2)),
+    },
+    {
+      title: 'ETF Flow And Session Liquidity Watch',
+      source: 'Flow',
+      age: 'daily',
+      sentiment: 'Neutral',
+      color: 'orange',
+      impact: 5,
+    },
+    {
+      title: 'Grid Exposure Check Before Next Macro Window',
+      source: 'Risk',
+      age: 'live setup',
+      sentiment: 'Neutral',
+      color: 'orange',
+      impact: 4,
     },
   ];
   document.getElementById('news-stack').innerHTML = cards.map(card => `
@@ -863,20 +1116,52 @@ function renderRegime(status, runtime, intelligence) {
   if (updated && intelligence && intelligence.generatedAtUtc) updated.textContent = `AI refresh ${intelligence.generatedAtUtc.slice(11, 16)}`;
 }
 
-function renderMacroCalendar() {
-  const events = [
-    ['ISM Manufacturing', 'May 1', '14:00 UTC', 3, '#1767c2'],
-    ['Fed Speakers', 'May 1', '16:30 UTC', 2, '#f7931a'],
-    ['Jobs Data (NFP)', 'May 8', '12:30 UTC', 3, '#0d8a2f'],
-    ['CPI Watch', 'May 12', '12:30 UTC', 3, '#d54545'],
-    ['PCE Drift', 'May 28', '12:30 UTC', 2, '#13a7b4'],
+function macroCalendarEvents(serverTimeUtc) {
+  const current = new Date(serverTimeUtc || Date.now());
+  const nowUtcMs = Number.isNaN(current.getTime()) ? Date.now() : current.getTime();
+  const gstNow = new Date(nowUtcMs + GST_OFFSET_MS);
+  const year = gstNow.getUTCFullYear();
+  const month = gstNow.getUTCMonth();
+  const day = gstNow.getUTCDate();
+  const templates = [
+    ['Asia Liquidity Open', 8, 0, 2, '#1767c2', 'Watch Asia liquidity, early dollar tone, and grid spread pressure.', 'Asia session set the initial liquidity tone for BTC spread and inventory risk.'],
+    ['Europe Macro / Yields Check', 12, 0, 2, '#f7931a', 'Watch EUR/US yields and risk appetite before the US data window.', 'Europe macro flow updated rate-pressure context for the active grid.'],
+    ['US Data Window', 16, 30, 3, '#0d8a2f', 'Watch scheduled US releases and liquidity reaction around the event.', 'US data window passed; confirm whether volatility expanded or faded.'],
+    ['US Cash Open / ETF Flow', 17, 30, 3, '#d54545', 'Watch ETF flow, equity beta, and headline reaction during the cash open.', 'US cash open flow is in; reassess BTC trend pressure and exposure.'],
+    ['Daily Close Risk Review', 23, 45, 2, '#13a7b4', 'Review realized PnL, open exposure, and overnight grid risk.', 'Daily risk review completed; carry only exposure justified by the regime.'],
   ];
-  document.getElementById('macro-calendar').innerHTML = events.map((ev, idx) => `
-    <div class="calendar-row">
-      <div class="calendar-icon" style="background:${ev[4]}">${idx + 1}</div>
-      <strong>${ev[0]}</strong>
-      <span class="calendar-meta">${ev[1]}<br>${ev[2]}</span>
-      <div><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots">${Array.from({ length: 3 }, (_, i) => `<span class="${i < ev[3] ? 'on' : ''}"></span>`).join('')}</div></div>
+  return templates.map(([title, hour, minute, impact, color, upcoming, completed]) => {
+    const eventUtcMs = Date.UTC(year, month, day, hour - 4, minute, 0, 0);
+    const eventGst = new Date(eventUtcMs + GST_OFFSET_MS);
+    const done = nowUtcMs >= eventUtcMs;
+    const hour12 = hour % 12 || 12;
+    const ampm = hour < 12 ? 'AM' : 'PM';
+    return {
+      title,
+      date: eventGst.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+      time: `${hour12}:${String(minute).padStart(2, '0')} ${ampm} GST`,
+      impact,
+      color,
+      status: done ? 'Completed' : 'Upcoming',
+      summary: done ? completed : upcoming,
+    };
+  });
+}
+
+function renderMacroCalendar(serverTimeUtc) {
+  const target = document.getElementById('macro-calendar');
+  if (!target) return;
+  const events = macroCalendarEvents(serverTimeUtc);
+  target.innerHTML = events.map((ev, idx) => `
+    <div class="calendar-row ${ev.status.toLowerCase()}">
+      <div class="calendar-icon" style="background:${ev.color}">${idx + 1}</div>
+      <div class="calendar-main">
+        <strong>${escapeHtml(ev.title)}</strong>
+        <div class="calendar-summary">${escapeHtml(ev.status)} - ${escapeHtml(ev.summary)}</div>
+      </div>
+      <span class="calendar-meta">${escapeHtml(ev.date)}<br>${escapeHtml(ev.time)}</span>
+      <span class="status-chip ${ev.status === 'Completed' ? 'good' : 'warn'}">${escapeHtml(ev.status)}</span>
+      <div class="calendar-impact"><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots">${Array.from({ length: 3 }, (_, i) => `<span class="${i < ev.impact ? 'on' : ''}"></span>`).join('')}</div></div>
     </div>
   `).join('');
 }
@@ -904,34 +1189,21 @@ function drawCandles(ohlcv) {
   canvas.height = rect.height * devicePixelRatio;
   ctx.scale(devicePixelRatio, devicePixelRatio);
   ctx.clearRect(0, 0, rect.width, rect.height);
-  if (!visibleRows.length) return;
+  if (!visibleRows.length) {
+    setCandleDetails(null);
+    return;
+  }
   const fallback = canvas.parentElement ? canvas.parentElement.querySelector('.server-chart-fallback') : null;
   if (fallback) fallback.remove();
-  const priceArea = rect.height * 0.76;
-  const volumeTop = priceArea + 10;
+  const priceArea = rect.height - 8;
   const padL = 22, padR = 72, padT = 18, padB = 24;
   const highs = visibleRows.map(c => c.high);
   const lows = visibleRows.map(c => c.low);
-  const vols = visibleRows.map(c => c.volumeUsdt);
   const maxP = Math.max(...highs), minP = Math.min(...lows), spanP = Math.max(1e-9, maxP - minP);
-  const maxV = Math.max(...vols, 1);
   const chartW = rect.width - padL - padR;
   const candleGap = chartW / Math.max(visibleRows.length, 1);
   const candleW = Math.max(5, candleGap * 0.62);
-  const third = chartW / 3;
-  const regimes = [
-    ['DISTRIBUTION', 'rgba(213,69,69,.065)', '#d54545'],
-    ['RANGE CONSOLIDATION', 'rgba(23,103,194,.07)', '#1767c2'],
-    ['ACCUMULATION', 'rgba(13,138,47,.06)', '#0d8a2f'],
-  ];
-  regimes.forEach((regime, i) => {
-    ctx.fillStyle = regime[1];
-    ctx.fillRect(padL + third * i, padT, third, priceArea - padT - padB);
-    ctx.fillStyle = regime[2];
-    ctx.font = '800 12px Inter, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(regime[0], padL + third * i + third / 2, padT + 24);
-  });
+  const priceToY = price => padT + (maxP - Number(price || 0)) / spanP * (priceArea - padT - padB);
   ctx.strokeStyle = 'rgba(23,23,19,.09)';
   ctx.lineWidth = 1;
   for (let i = 0; i < 6; i++) {
@@ -943,56 +1215,159 @@ function drawCandles(ohlcv) {
     ctx.textAlign = 'left';
     ctx.fillText(fmtPrice(price), rect.width - padR + 10, y + 4);
   }
-  const hoverState = canvas.__hoverIndex;
-  ctx.beginPath();
-  visibleRows.forEach((c, i) => {
-    const x = padL + candleGap * (i + 0.5);
-    const y = padT + (maxP - c.close) / spanP * (priceArea - padT - padB);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  const hoverState = stateUi.chartHoverIndex;
+  const markerBuckets = new Map();
+  (stateUi.lastEvents || []).forEach(ev => {
+    if (ev.event !== 'ENTER' && ev.event !== 'EXIT') return;
+    const ts = eventTimeMs(ev);
+    if (!Number.isFinite(ts)) return;
+    const idx = visibleRows.findIndex((c, i) => {
+      const open = Number(c.openTimeMs || 0);
+      const close = Number(c.closeTimeMs || visibleRows[i + 1]?.openTimeMs || (open + (intervalDurationMs(stateUi.timeframe) || 0)));
+      return ts >= open && ts <= close;
+    });
+    if (idx < 0) return;
+    if (!markerBuckets.has(idx)) markerBuckets.set(idx, []);
+    markerBuckets.get(idx).push(ev);
   });
-  ctx.strokeStyle = 'rgba(247,147,26,.95)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
   visibleRows.forEach((c, i) => {
     const x = padL + candleGap * (i + 0.5);
-    const yHigh = padT + (maxP - c.high) / spanP * (priceArea - padT - padB);
-    const yLow = padT + (maxP - c.low) / spanP * (priceArea - padT - padB);
-    const yOpen = padT + (maxP - c.open) / spanP * (priceArea - padT - padB);
-    const yClose = padT + (maxP - c.close) / spanP * (priceArea - padT - padB);
+    const yHigh = priceToY(c.high);
+    const yLow = priceToY(c.low);
+    const yOpen = priceToY(c.open);
+    const yClose = priceToY(c.close);
     const up = c.close >= c.open;
-    const color = up ? '#4dbb92' : '#33302a';
+    const color = up ? '#2fc486' : '#d54545';
     ctx.strokeStyle = color;
     ctx.beginPath(); ctx.moveTo(x, yHigh); ctx.lineTo(x, yLow); ctx.stroke();
     const top = Math.min(yOpen, yClose), body = Math.max(2, Math.abs(yClose - yOpen));
     ctx.fillStyle = color;
     ctx.fillRect(x - candleW / 2, top, candleW, body);
-    const volH = (c.volumeUsdt / maxV) * (rect.height - volumeTop - 18);
-    ctx.globalAlpha = 0.45;
-    ctx.fillRect(x - candleW / 2, rect.height - volH - 8, candleW, volH);
-    ctx.globalAlpha = 1;
     if (hoverState === i) {
       ctx.strokeStyle = '#f7931a';
       ctx.strokeRect(x - candleW / 2 - 2, top - 2, candleW + 4, body + 4);
     }
   });
+  markerBuckets.forEach((events, idx) => {
+    const c = visibleRows[idx];
+    const x = padL + candleGap * (idx + 0.5);
+    events.slice(-4).forEach((ev, markerIdx) => {
+      const isEntry = ev.event === 'ENTER';
+      const label = isEntry ? 'B' : 'S';
+      const color = isEntry ? '#0d8a2f' : '#d54545';
+      const anchorY = Number.isFinite(Number(ev.price)) ? priceToY(ev.price) : priceToY(isEntry ? c.low : c.high);
+      const offset = 16 + markerIdx * 18;
+      const y = isEntry
+        ? Math.min(priceArea - padB - 11, anchorY + offset)
+        : Math.max(padT + 11, anchorY - offset);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,253,248,.95)';
+      ctx.stroke();
+      ctx.fillStyle = '#fffdf8';
+      ctx.font = '900 11px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x, y + 0.5);
+      ctx.restore();
+    });
+  });
   const latest = visibleRows[visibleRows.length - 1];
   const delta = latest.open ? latest.close - latest.open : 0;
   const deltaPct = latest.open ? delta / latest.open : 0;
-  setHtmlIfPresent('latest-candle', `<strong>Live candle</strong><span>O ${fmtPrice(latest.open)}  H ${fmtPrice(latest.high)}  L ${fmtPrice(latest.low)}  C ${fmtPrice(latest.close)}  Vol ${fmtMoney(latest.volumeUsdt)}</span>`);
-  setHtmlIfPresent('market-legend', `<span><b>${latest.symbol || 'BTC/USDT'}</b></span><span>O ${fmtPrice(latest.open)}</span><span>H ${fmtPrice(latest.high)}</span><span>L ${fmtPrice(latest.low)}</span><span>C ${fmtPrice(latest.close)}</span><span class="${signedClass(delta)}">${delta >= 0 ? '+' : ''}${fmtMoney(delta)} (${deltaPct >= 0 ? '+' : ''}${fmtPct(deltaPct)})</span>`);
-  setTextIfPresent('chart-quote-line', `O ${fmtPrice(latest.open)}  H ${fmtPrice(latest.high)}  L ${fmtPrice(latest.low)}  C ${fmtPrice(latest.close)}`);
-  canvas.onmousemove = ev => {
-    const r = canvas.getBoundingClientRect();
-    const x = ev.clientX - r.left;
+  setHtmlIfPresent('market-legend', `<span><b>${escapeHtml(latest.symbol || 'BTC/USDT')}</b></span><span>O ${fmtPrice(latest.open)}</span><span>H ${fmtPrice(latest.high)}</span><span>L ${fmtPrice(latest.low)}</span><span>C ${fmtPrice(latest.close)}</span><span class="${signedClass(delta)}">${delta >= 0 ? '+' : ''}${fmtMoney(delta)} (${deltaPct >= 0 ? '+' : ''}${fmtPct(deltaPct)})</span>`);
+  const updateHover = x => {
     const idx = Math.max(0, Math.min(visibleRows.length - 1, Math.floor((x - padL) / Math.max(1, candleGap))));
-    canvas.__hoverIndex = idx;
+    stateUi.chartHoverIndex = idx;
     const c = visibleRows[idx];
-    setHtmlIfPresent('hover-ohlcv', `<strong>Cursor</strong><span>${new Date(c.openTimeMs).toLocaleString()}  O ${fmtPrice(c.open)}  H ${fmtPrice(c.high)}  L ${fmtPrice(c.low)}  C ${fmtPrice(c.close)}  Vol ${fmtMoney(c.volumeUsdt)}</span>`);
-    drawCandles(allRows);
+    setCandleDetails(c);
   };
+  setCandleDetails(hoverState != null && visibleRows[hoverState] ? visibleRows[hoverState] : latest);
+  const applyPanFromClientX = clientX => {
+    if (!(stateUi.chartDragState && stateUi.chartDragState.active)) return;
+    const dx = clientX - stateUi.chartDragState.startX;
+    const shift = Math.round(dx / Math.max(1, candleGap));
+    const maxOffset = Math.max(0, allRows.length - Math.max(30, Number(stateUi.candleLimit || DEFAULT_LIMITS[stateUi.timeframe] || 180)));
+    stateUi.panOffset = Math.max(0, Math.min(maxOffset, stateUi.chartDragState.startOffset + shift));
+    persistChartViewport();
+    scheduleChartDraw();
+  };
+  const stopMousePan = () => {
+    stateUi.chartDragState = null;
+    canvas.style.cursor = 'grab';
+  };
+  canvas.onmousedown = ev => {
+    if (ev.button !== 0) return;
+    stateUi.chartDragState = { active: true, startX: ev.clientX, startOffset: Number(stateUi.panOffset || 0) };
+    canvas.style.cursor = 'grabbing';
+    const move = moveEv => {
+      applyPanFromClientX(moveEv.clientX);
+      if (moveEv.cancelable) moveEv.preventDefault();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      stopMousePan();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    ev.preventDefault();
+  };
+  canvas.onmouseup = stopMousePan;
   canvas.onmouseleave = () => {
-    canvas.__hoverIndex = null;
-    setHtmlIfPresent('hover-ohlcv', '<strong>Cursor</strong><span>Move over a candle</span>');
+    if (stateUi.chartDragState && stateUi.chartDragState.active) return;
+    canvas.style.cursor = 'grab';
+    stateUi.chartHoverIndex = null;
+    setCandleDetails(latest);
+    scheduleChartDraw();
+  };
+  canvas.onmousemove = ev => {
+    if (stateUi.chartDragState && stateUi.chartDragState.active) {
+      applyPanFromClientX(ev.clientX);
+      return;
+    }
+    const r = canvas.getBoundingClientRect();
+    updateHover(ev.clientX - r.left);
+    scheduleChartDraw();
+  };
+  canvas.onwheel = ev => {
+    ev.preventDefault();
+    const current = Math.max(30, Math.min(1000, Number(stateUi.candleLimit || DEFAULT_LIMITS[stateUi.timeframe] || 180)));
+    const step = Math.max(5, Math.round(current * 0.08));
+    const next = ev.deltaY < 0 ? Math.max(30, current - step) : Math.min(1000, current + step);
+    if (next === current) return;
+    stateUi.candleLimit = next;
+    const maxOffset = Math.max(0, allRows.length - next);
+    stateUi.panOffset = Math.max(0, Math.min(maxOffset, Number(stateUi.panOffset || 0)));
+    persistChartViewport();
+    scheduleChartDraw();
+  };
+  canvas.style.cursor = stateUi.chartDragState && stateUi.chartDragState.active ? 'grabbing' : 'grab';
+  if (canvas.style.touchAction !== 'none') {
+    canvas.style.touchAction = 'none';
+  }
+  canvas.ontouchstart = ev => {
+    const touch = ev.touches && ev.touches[0];
+    if (!touch) return;
+    stateUi.chartDragState = { active: true, startX: touch.clientX, startOffset: Number(stateUi.panOffset || 0) };
+  };
+  canvas.ontouchmove = ev => {
+    const touch = ev.touches && ev.touches[0];
+    if (!touch || !(stateUi.chartDragState && stateUi.chartDragState.active)) return;
+    const dx = touch.clientX - stateUi.chartDragState.startX;
+    const shift = Math.round(dx / Math.max(1, candleGap));
+    const maxOffset = Math.max(0, allRows.length - Math.max(30, Number(stateUi.candleLimit || DEFAULT_LIMITS[stateUi.timeframe] || 180)));
+    stateUi.panOffset = Math.max(0, Math.min(maxOffset, stateUi.chartDragState.startOffset + shift));
+    persistChartViewport();
+    scheduleChartDraw();
+    if (ev.cancelable) ev.preventDefault();
+  };
+  canvas.ontouchend = () => {
+    stateUi.chartDragState = null;
   };
 }
 
@@ -1235,7 +1610,23 @@ async function resyncChartHistory(reason = 'resync') {
 
 function updateSnapBadge(card) {
   const badge = card.querySelector('.snap-badge');
-  if (badge) badge.textContent = `${card.dataset.span || card.dataset.defaultSpan || 8} cols`;
+  if (badge) {
+    const height = card.dataset.height ? ` - ${Math.round(Number(card.dataset.height))}px` : '';
+    badge.textContent = `${card.dataset.span || card.dataset.defaultSpan || 8} cols${height}`;
+  }
+}
+function ensureLayoutControls(card) {
+  if (!card.querySelector('.snap-badge')) {
+    const badge = document.createElement('div');
+    badge.className = 'snap-badge';
+    card.appendChild(badge);
+  }
+  if (!card.querySelector('.resize-handle')) {
+    const handle = document.createElement('div');
+    handle.className = 'resize-handle';
+    handle.setAttribute('aria-hidden', 'true');
+    card.appendChild(handle);
+  }
 }
 function saveLayout() {
   const cards = [...document.querySelectorAll('.card')]
@@ -1243,7 +1634,8 @@ function saveLayout() {
     .map((card, idx) => ({
       id: card.id,
       order: card.id === 'summary-card' ? 0 : (idx + 1),
-      span: card.dataset.span || card.dataset.defaultSpan || '8'
+      span: card.dataset.span || card.dataset.defaultSpan || '8',
+      height: card.dataset.height || ''
     }));
   localStorage.setItem(getLayoutKey(), JSON.stringify(cards));
 }
@@ -1251,6 +1643,18 @@ function applyCardSpan(card, span) {
   const nextSpan = Math.max(MIN_SPAN, Math.min(GRID_COLS, Number(span) || Number(card.dataset.defaultSpan || 8)));
   card.dataset.span = String(nextSpan);
   card.style.gridColumn = `span ${nextSpan}`;
+  updateSnapBadge(card);
+}
+function applyCardHeight(card, height) {
+  const nextHeight = Number(height || 0);
+  if (nextHeight > 0) {
+    const clamped = Math.max(140, Math.min(1400, nextHeight));
+    card.dataset.height = String(Math.round(clamped));
+    card.style.height = `${Math.round(clamped)}px`;
+  } else {
+    delete card.dataset.height;
+    card.style.height = '';
+  }
   updateSnapBadge(card);
 }
 function applyDefaultLayout() {
@@ -1263,7 +1667,9 @@ function applyDefaultLayout() {
   });
   cards.forEach(card => {
     dashboard.appendChild(card);
+    ensureLayoutControls(card);
     applyCardSpan(card, card.dataset.defaultSpan || 8);
+    applyCardHeight(card, null);
   });
 }
 function loadLayout() {
@@ -1282,8 +1688,10 @@ function loadLayout() {
     });
     ordered.forEach(card => {
       dashboard.appendChild(card);
+      ensureLayoutControls(card);
       const cfg = byId.get(card.id) || {};
       applyCardSpan(card, cfg.span || card.dataset.defaultSpan || 8);
+      applyCardHeight(card, cfg.height || null);
     });
   } catch {
     applyDefaultLayout();
@@ -1316,9 +1724,11 @@ function reorderCardBefore(dashboard, dragCard, targetCard, pointerX) {
 function enableDrag() {
   const dashboard = document.getElementById('dashboard');
   document.querySelectorAll('.card').forEach(card => {
+    ensureLayoutControls(card);
     const head = card.querySelector('.card-head');
     const handle = card.querySelector('.resize-handle');
     applyCardSpan(card, card.dataset.span || card.dataset.defaultSpan || 8);
+    if (card.dataset.height) applyCardHeight(card, card.dataset.height);
     card.classList.add('reflowing');
     const beginDragSession = start => {
       const cards = [...dashboard.querySelectorAll('.card')];
@@ -1377,6 +1787,7 @@ function enableDrag() {
     };
     const startResize = startPoint => {
       const startSpan = Number(card.dataset.span || card.dataset.defaultSpan || 8);
+      const startHeight = card.getBoundingClientRect().height;
       const dashboardRect = dashboard.getBoundingClientRect();
       const colWidth = (dashboardRect.width - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS;
       let pendingPoint = startPoint, rafId = null;
@@ -1384,7 +1795,10 @@ function enableDrag() {
       const renderFrame = () => {
         rafId = null;
         const deltaCols = Math.round((pendingPoint.x - startPoint.x) / Math.max(1, colWidth + GRID_GAP));
+        const deltaHeight = pendingPoint.y - startPoint.y;
         applyCardSpan(card, startSpan + deltaCols);
+        applyCardHeight(card, startHeight + deltaHeight);
+        if (card.id === 'market-card') scheduleChartDraw();
       };
       const queueFrame = point => { pendingPoint = point; if (rafId == null) rafId = requestAnimationFrame(renderFrame); };
       const move = e => { queueFrame(pointerClientXY(e)); if (e.cancelable) e.preventDefault(); };
@@ -1582,7 +1996,7 @@ function applyLiveMarketPayload(data, renderChart = true) {
   const freshLabel = document.getElementById('fresh-label');
   if (freshLabel) freshLabel.textContent = `Live payload • ${humanAge(stateUi.lastStatusFreshnessSeconds)}`;
   const serverTime = document.getElementById('server-time');
-  if (serverTime) serverTime.textContent = fmtDate(data.serverTimeUtc);
+  if (serverTime) serverTime.textContent = fmtServerTime(data.serverTimeUtc);
   stateUi.marketRefreshMs = Math.max(1000, Number(data.refreshMs || stateUi.marketRefreshMs || 1000));
   safeRender('summary', () => renderStickySummary(status, cumulative, runtime, grid));
   if (data.eventsPatch) {
@@ -1598,6 +2012,7 @@ function applyLiveMarketPayload(data, renderChart = true) {
   }
   safeRender('orders', () => renderOrders());
   safeRender('status', () => renderLiveStatusFooter(status, state, runtime, data, grid));
+  safeRender('calendar', () => renderMacroCalendar(data.serverTimeUtc));
   if (renderChart) {
     stateUi.lastOhlcv = ohlcv || [];
     safeRender('chart', () => drawCandles(ohlcv || []));
@@ -1732,7 +2147,7 @@ async function refresh() {
       aiToggle.classList.toggle('ai-off', !aiEnabled);
     }
     setTextIfPresent('fresh-label', freshnessSeconds != null ? `Live payload • ${humanAge(freshnessSeconds)}` : 'No timestamp');
-    setTextIfPresent('server-time', fmtDate(serverTimeUtc));
+    setTextIfPresent('server-time', fmtServerTime(serverTimeUtc));
     safeRender('summary', () => renderStickySummary(status, cumulative, runtime, grid));
     safeRender('status', () => renderLiveStatusFooter(status, state, runtime, data, grid));
     safeRender('events', () => renderEvents((events || []).slice().reverse()));
@@ -1741,7 +2156,7 @@ async function refresh() {
     safeRender('timeframe', () => renderTimeframeControls());
     safeRender('intelligence', () => renderIntelligence(status, cumulative, runtime, intelligence));
     safeRender('regime', () => renderRegime(status, runtime, intelligence));
-    safeRender('calendar', () => renderMacroCalendar());
+    safeRender('calendar', () => renderMacroCalendar(serverTimeUtc));
     const buyFilter = document.getElementById('orders-filter-buy-btn');
     if (buyFilter) buyFilter.style.color = '#35d08a';
     const sellFilter = document.getElementById('orders-filter-sell-btn');
