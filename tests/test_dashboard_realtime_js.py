@@ -42,6 +42,7 @@ def test_dashboard_boot_tolerates_cards_without_heads(tmp_path):
         className: '',
         classList: { toggle(){}, add(){}, remove(){} },
         addEventListener(){},
+        setAttribute(name, value){ this[name] = value; },
         appendChild(child){ this.children.push(child); },
         querySelector(sel){ return null; },
         querySelectorAll(){ return []; },
@@ -198,6 +199,7 @@ def test_refresh_tolerates_missing_optional_refresh_controls(tmp_path):
         className: '',
         classList: { toggle(){}, add(){}, remove(){} },
         addEventListener(){},
+        setAttribute(name, value){ this[name] = value; },
         appendChild(child){ this.children.push(child); },
         querySelector(){ return null; },
         querySelectorAll(){ return []; },
@@ -394,6 +396,7 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
         className: '',
         classList: { toggle(){}, add(){}, remove(){} },
         addEventListener(){},
+        setAttribute(name, value){ this[name] = value; },
         appendChild(child){ this.children.push(child); },
         querySelector(){ return null; },
         querySelectorAll(){ return []; },
@@ -613,6 +616,7 @@ def test_summary_and_chart_renderers_tolerate_missing_optional_targets(tmp_path)
         className: '',
         classList: { toggle(){}, add(){}, remove(){} },
         addEventListener(){},
+        setAttribute(name, value){ this[name] = value; },
         appendChild(child){ this.children.push(child); },
         querySelector(){ return null; },
         querySelectorAll(){ return []; },
@@ -630,7 +634,7 @@ def test_summary_and_chart_renderers_tolerate_missing_optional_targets(tmp_path)
       'orders-tab-open-btn','orders-tab-history-btn','orders-filter-buy-btn',
       'orders-filter-sell-btn','orders-first-btn','orders-prev-btn',
       'orders-next-btn','orders-last-btn','config-save-btn','market-chart',
-      'boot-error'
+      'state-mode','boot-error'
     ].forEach(addElement);
 
     const sandbox = {
@@ -690,6 +694,9 @@ def test_summary_and_chart_renderers_tolerate_missing_optional_targets(tmp_path)
         renderStickySummary,
         drawCandles,
         dashboardModeLabel,
+        renderModeControl,
+        ensureLayoutControls,
+        applyCardHeight,
       };
     `, sandbox);
 
@@ -699,6 +706,20 @@ def test_summary_and_chart_renderers_tolerate_missing_optional_targets(tmp_path)
     assert.strictEqual(t.dashboardModeLabel({ gridMode: 'flexy' }, true), 'Optimized AI');
     assert.strictEqual(t.dashboardModeLabel({ gridMode: 'ai_optimized' }, false), 'Rules');
     assert.strictEqual(t.dashboardModeLabel({ gridMode: 'legacy' }, true), 'Grid + Local AI');
+    t.stateUi.lastState = { aiEnabled: true, gridMode: 'flexy' };
+    assert.doesNotThrow(() => t.renderModeControl(true));
+    assert.ok(elements.get('state-mode').innerHTML.includes('Optimized AI'));
+    assert.ok(elements.get('state-mode').innerHTML.includes('disabled'));
+    const layoutCard = makeElement('layout-card');
+    layoutCard.querySelector = sel => layoutCard.children.find(child =>
+      (sel === '.snap-badge' && child.className === 'snap-badge') ||
+      (sel === '.resize-handle' && child.className === 'resize-handle')
+    ) || null;
+    assert.doesNotThrow(() => t.ensureLayoutControls(layoutCard));
+    assert.ok(layoutCard.children.some(child => child.className === 'snap-badge'));
+    assert.ok(layoutCard.children.some(child => child.className === 'resize-handle'));
+    t.applyCardHeight(layoutCard, 500);
+    assert.strictEqual(layoutCard.style.height, '500px');
     t.stateUi.lastState = { aiEnabled: true, gridMode: 'scalpy' };
     assert.doesNotThrow(() => t.renderStickySummary(
       {

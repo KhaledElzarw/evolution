@@ -4,7 +4,9 @@ const MIN_SPAN = 6;
 const TIMEFRAMES = ['1s', '1m', '5m', '30m', '1h', '1d', '1w', '1M'];
 const TIMEFRAME_LABELS = { '1s': '1 Second', '1m': '1 Minute', '5m': '5 Minutes', '30m': '30 Minutes', '1h': '1 Hour', '1d': '1 Day', '1w': '1 Week', '1M': '1 Month' };
 const DEFAULT_LIMITS = { '1s': 240, '1m': 180, '5m': 180, '30m': 180, '1h': 240, '1d': 180, '1w': 120, '1M': 120 };
-const GRID_MODE_LABELS = { scalpy: 'Scalpy', fatty: 'Fatty' };
+const GRID_MODES = ['scalpy', 'fatty'];
+const MODE_CONTROL_MODES = ['scalpy', 'fatty', 'ai_optimized'];
+const GRID_MODE_LABELS = { scalpy: 'Scalpy', fatty: 'Fatty', ai_optimized: 'Optimized AI' };
 const LEGACY_OPTIMIZED_MODES = new Set(['flexy', 'ai_optimized']);
 const INITIAL_QUERY = new URLSearchParams(window.location.search);
 function normalizeInitialTimeframe(tf) { return TIMEFRAMES.includes(tf) ? tf : '1m'; }
@@ -16,7 +18,7 @@ const CONFIG_FIELDS = [
   { key: 'positionCapPct', label: 'Position Cap %', type: 'number', step: '0.01' },
   { key: 'maxDailyLossPct', label: 'Max Daily Loss %', type: 'number', step: '0.01' },
   { key: 'maxTradesPerDay', label: 'Max Trades / Day', type: 'number', step: '1' },
-  { key: 'gridMode', label: 'Grid Mode', type: 'select', options: ['scalpy', 'fatty'] },
+  { key: 'gridMode', label: 'Grid Mode', type: 'select', options: GRID_MODES },
   { key: 'gridLevels', label: 'Grid Levels', type: 'number', step: '1' },
   { key: 'gridSpacingPct', label: 'Grid Spacing %', type: 'number', step: '0.001' },
   { key: 'gridMaxExposurePct', label: 'Grid Max Exposure %', type: 'number', step: '0.01' },
@@ -216,12 +218,37 @@ function acceptPayloadSeq(channel, seq, instanceId = null) {
   return true;
 }
 function getLayoutKey() { return 'tradebot-layout-v7'; }
+function gridModeLabel(mode) { return GRID_MODE_LABELS[mode] || mode; }
+function dashboardModeKey(state) {
+  const mode = String((state && state.gridMode) || '').trim().toLowerCase();
+  if (GRID_MODES.includes(mode)) return mode;
+  if (LEGACY_OPTIMIZED_MODES.has(mode)) return 'ai_optimized';
+  return 'grid';
+}
 function dashboardModeLabel(state, aiEnabled) {
   const suffix = aiEnabled ? 'Local AI' : 'Rules';
-  const mode = String((state && state.gridMode) || '').trim().toLowerCase();
-  if (Object.prototype.hasOwnProperty.call(GRID_MODE_LABELS, mode)) return `${GRID_MODE_LABELS[mode]} + ${suffix}`;
-  if (LEGACY_OPTIMIZED_MODES.has(mode)) return aiEnabled ? 'Optimized AI' : 'Rules';
+  const mode = dashboardModeKey(state);
+  if (GRID_MODES.includes(mode)) return `${GRID_MODE_LABELS[mode]} + ${suffix}`;
+  if (mode === 'ai_optimized') return aiEnabled ? 'Optimized AI' : 'Rules';
   return `Grid + ${suffix}`;
+}
+function renderModeControl(aiEnabled) {
+  const el = document.getElementById('state-mode');
+  if (!el) return;
+  const current = dashboardModeKey(stateUi.lastState || {});
+  el.innerHTML = `
+    <span class="mode-status">${aiEnabled ? 'Local AI' : 'Rules'}</span>
+    <span class="mode-switch" role="group" aria-label="Grid mode">
+      ${MODE_CONTROL_MODES.map(mode => {
+        const active = mode === current;
+        const enabled = GRID_MODES.includes(mode);
+        return `<button class="mode-option ${active ? 'active' : ''}" type="button" data-grid-mode="${mode}" aria-pressed="${active ? 'true' : 'false'}"${enabled ? '' : ' disabled'}>${gridModeLabel(mode)}</button>`;
+      }).join('')}
+    </span>
+  `;
+  el.querySelectorAll('[data-grid-mode]').forEach(btn => {
+    if (!btn.disabled) btn.addEventListener('click', () => setGridMode(btn.dataset.gridMode));
+  });
 }
 function persistChartViewport() {
   localStorage.setItem('tradebot-chart-limit', String(Math.max(30, Math.min(1000, Number(stateUi.candleLimit || 180)))));
@@ -344,7 +371,7 @@ function renderStickySummary(status, cumulative, runtime, grid) {
     }
   }
   setTextIfPresent('trading-state-label', stateLabel);
-  setTextIfPresent('state-mode', dashboardModeLabel(stateUi.lastState || {}, aiEnabled));
+  renderModeControl(aiEnabled);
   const riskEl = setTextIfPresent('state-risk', exposure > 0.85 ? 'High' : (exposure > 0.55 ? 'Normal' : 'Light'));
   if (riskEl) riskEl.className = exposure > 0.85 ? 'negative' : 'positive';
   setTextIfPresent('state-exposure', fmtPct(exposure));
@@ -382,6 +409,36 @@ async function toggleAiAssist() {
     await refresh();
   } finally {
     btn.disabled = false;
+  }
+}
+
+async function setGridMode(mode) {
+  const nextMode = GRID_MODES.includes(String(mode)) ? String(mode) : null;
+  if (!nextMode) {
+    renderModeControl(!(stateUi.lastState && stateUi.lastState.aiEnabled === false));
+    return;
+  }
+  const previousState = Object.assign({}, stateUi.lastState || {});
+  const previousMode = previousState.gridMode;
+  stateUi.lastState = Object.assign({}, previousState, { gridMode: nextMode });
+  renderModeControl(stateUi.lastState.aiEnabled !== false);
+  const modeEl = document.getElementById('state-mode');
+  if (modeEl) modeEl.classList.add('saving');
+  try {
+    const res = await fetch(apiPath('/api/config'), {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ gridMode: nextMode }),
+    });
+    if (!res.ok) throw new Error(await responseErrorMessage(res, `mode save failed: ${res.status}`));
+    await refresh();
+  } catch (err) {
+    stateUi.lastState = Object.assign({}, previousState, { gridMode: previousMode });
+    renderModeControl(stateUi.lastState.aiEnabled !== false);
+    showBootError(err && err.message ? err.message : 'mode save failed');
+  } finally {
+    const finalEl = document.getElementById('state-mode');
+    if (finalEl) finalEl.classList.remove('saving');
   }
 }
 
@@ -1435,7 +1492,23 @@ async function resyncChartHistory(reason = 'resync') {
 
 function updateSnapBadge(card) {
   const badge = card.querySelector('.snap-badge');
-  if (badge) badge.textContent = `${card.dataset.span || card.dataset.defaultSpan || 8} cols`;
+  if (badge) {
+    const height = card.dataset.height ? ` - ${Math.round(Number(card.dataset.height))}px` : '';
+    badge.textContent = `${card.dataset.span || card.dataset.defaultSpan || 8} cols${height}`;
+  }
+}
+function ensureLayoutControls(card) {
+  if (!card.querySelector('.snap-badge')) {
+    const badge = document.createElement('div');
+    badge.className = 'snap-badge';
+    card.appendChild(badge);
+  }
+  if (!card.querySelector('.resize-handle')) {
+    const handle = document.createElement('div');
+    handle.className = 'resize-handle';
+    handle.setAttribute('aria-hidden', 'true');
+    card.appendChild(handle);
+  }
 }
 function saveLayout() {
   const cards = [...document.querySelectorAll('.card')]
@@ -1443,7 +1516,8 @@ function saveLayout() {
     .map((card, idx) => ({
       id: card.id,
       order: card.id === 'summary-card' ? 0 : (idx + 1),
-      span: card.dataset.span || card.dataset.defaultSpan || '8'
+      span: card.dataset.span || card.dataset.defaultSpan || '8',
+      height: card.dataset.height || ''
     }));
   localStorage.setItem(getLayoutKey(), JSON.stringify(cards));
 }
@@ -1451,6 +1525,18 @@ function applyCardSpan(card, span) {
   const nextSpan = Math.max(MIN_SPAN, Math.min(GRID_COLS, Number(span) || Number(card.dataset.defaultSpan || 8)));
   card.dataset.span = String(nextSpan);
   card.style.gridColumn = `span ${nextSpan}`;
+  updateSnapBadge(card);
+}
+function applyCardHeight(card, height) {
+  const nextHeight = Number(height || 0);
+  if (nextHeight > 0) {
+    const clamped = Math.max(140, Math.min(1400, nextHeight));
+    card.dataset.height = String(Math.round(clamped));
+    card.style.height = `${Math.round(clamped)}px`;
+  } else {
+    delete card.dataset.height;
+    card.style.height = '';
+  }
   updateSnapBadge(card);
 }
 function applyDefaultLayout() {
@@ -1463,7 +1549,9 @@ function applyDefaultLayout() {
   });
   cards.forEach(card => {
     dashboard.appendChild(card);
+    ensureLayoutControls(card);
     applyCardSpan(card, card.dataset.defaultSpan || 8);
+    applyCardHeight(card, null);
   });
 }
 function loadLayout() {
@@ -1482,8 +1570,10 @@ function loadLayout() {
     });
     ordered.forEach(card => {
       dashboard.appendChild(card);
+      ensureLayoutControls(card);
       const cfg = byId.get(card.id) || {};
       applyCardSpan(card, cfg.span || card.dataset.defaultSpan || 8);
+      applyCardHeight(card, cfg.height || null);
     });
   } catch {
     applyDefaultLayout();
@@ -1516,9 +1606,11 @@ function reorderCardBefore(dashboard, dragCard, targetCard, pointerX) {
 function enableDrag() {
   const dashboard = document.getElementById('dashboard');
   document.querySelectorAll('.card').forEach(card => {
+    ensureLayoutControls(card);
     const head = card.querySelector('.card-head');
     const handle = card.querySelector('.resize-handle');
     applyCardSpan(card, card.dataset.span || card.dataset.defaultSpan || 8);
+    if (card.dataset.height) applyCardHeight(card, card.dataset.height);
     card.classList.add('reflowing');
     const beginDragSession = start => {
       const cards = [...dashboard.querySelectorAll('.card')];
@@ -1577,6 +1669,7 @@ function enableDrag() {
     };
     const startResize = startPoint => {
       const startSpan = Number(card.dataset.span || card.dataset.defaultSpan || 8);
+      const startHeight = card.getBoundingClientRect().height;
       const dashboardRect = dashboard.getBoundingClientRect();
       const colWidth = (dashboardRect.width - GRID_GAP * (GRID_COLS - 1)) / GRID_COLS;
       let pendingPoint = startPoint, rafId = null;
@@ -1584,7 +1677,10 @@ function enableDrag() {
       const renderFrame = () => {
         rafId = null;
         const deltaCols = Math.round((pendingPoint.x - startPoint.x) / Math.max(1, colWidth + GRID_GAP));
+        const deltaHeight = pendingPoint.y - startPoint.y;
         applyCardSpan(card, startSpan + deltaCols);
+        applyCardHeight(card, startHeight + deltaHeight);
+        if (card.id === 'market-card') scheduleChartDraw();
       };
       const queueFrame = point => { pendingPoint = point; if (rafId == null) rafId = requestAnimationFrame(renderFrame); };
       const move = e => { queueFrame(pointerClientXY(e)); if (e.cancelable) e.preventDefault(); };
