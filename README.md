@@ -1,14 +1,12 @@
-# tradebot
+# Tradebot
 
 Local-first Binance Spot trading automation with SQLite persistence, dashboard
-operations, and optional AI review. Built for cautious paper/testnet workflows,
-not for casual live-risk experimentation.
+operations, and optional AI review. Built for cautious paper and Binance Spot
+testnet-oriented workflows, not for casual live-risk experimentation.
 
-`tradebot` is a Python trading-bot workspace for Binance Spot testnet-style
-workflows, local SQLite-backed runtime storage, dashboard monitoring, selected
-dashboard controls, and optional local AI review. The repository is organized
-for cautious modernization: setup, safety, tests, runtime boundaries, and
-operator docs should stay clear before larger structural refactors.
+Tradebot is organized for cautious modernization: setup, safety, tests, runtime
+boundaries, and operator docs should stay clear before larger structural
+refactors.
 
 For deeper operating details, read [OPERATIONS.md](OPERATIONS.md).
 
@@ -28,8 +26,8 @@ For deeper operating details, read [OPERATIONS.md](OPERATIONS.md).
 
 ## Safety TL;DR
 
-- Start with paper, testnet, and smoke-test workflows. A clean testnet run does
-  not prove live trading is safe.
+- Start with paper, Binance Spot testnet, and smoke-test workflows. A clean
+  testnet run does not prove live trading is safe.
 - Never grant Binance withdrawal permissions to bot API keys. Use the minimum
   permissions required for the operating mode.
 - Treat the dashboard as a sensitive local control surface. If it is not bound
@@ -50,7 +48,8 @@ real secrets were committed or shared in a ZIP, rotate them immediately. See
 
 ## What Tradebot Does
 
-- Runs a local Python trading engine for Binance Spot testnet-style workflows.
+- Runs a local Python trading engine for paper and Binance Spot
+  testnet-oriented workflows.
 - Supports the current grid modes `scalpy` and `fatty`; unsupported grid modes
   fail closed through engine and dashboard validation.
 - Uses `tradebot.sqlite3` through `sqlite_store.py` as the canonical local
@@ -109,8 +108,9 @@ real values only in private `.env` files or deployment secret storage. Review
 the Binance/testnet, persistence, dashboard, and local AI sidecar sections
 before starting services.
 
-For a first local run, bind the dashboard to localhost or set a token before
-using a network-facing host:
+The example config may use a network-facing dashboard host. For first local
+runs, set `TRADEBOT_DASHBOARD_HOST=127.0.0.1`; only use a network-facing host
+when remote access is intentional and `TRADEBOT_DASHBOARD_TOKEN` is set.
 
 ```text
 TRADEBOT_DASHBOARD_HOST=127.0.0.1
@@ -181,8 +181,8 @@ python ai_sidecar.py
 - Python 3.10 is currently used by the local development environment.
 - Git.
 - Network access for dependency installation.
-- Optional local services depending on what you run: Binance testnet access,
-  dashboard access, and an Ollama/OpenAI-compatible local AI endpoint.
+- Optional local services depending on what you run: Binance Spot testnet
+  access, dashboard access, and an Ollama/OpenAI-compatible local AI endpoint.
 
 ## Environment Variables
 

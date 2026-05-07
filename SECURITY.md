@@ -132,6 +132,21 @@ localhost-only binding unless remote access is intentional, and set
 - Rotate any credential that was committed, logged, screenshotted, shared in a
   ZIP, or exposed outside the trusted operating environment.
 
+## Local Security Validation
+
+Run the local validation suite before publishing security-sensitive
+documentation or operational changes:
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python -m compileall -q .
+.venv/bin/python -m ruff check .
+git diff --check
+```
+
+Future secret scanning can be added separately without changing this local
+baseline.
+
 ## Secret Handling Rules
 
 - Real secrets must never be committed.
@@ -182,8 +197,9 @@ security bugs by themselves:
 - Trading loss from market behavior, strategy behavior, latency, partial fills,
   slippage, or operator decisions.
 - Expected behavior from intentionally enabled live orders.
-- Public exposure against documented guidance, such as running an
-  unauthenticated dashboard on an untrusted network.
+- Public unauthenticated dashboard exposure is a serious deployment risk. It is
+  not necessarily a code vulnerability unless a documented boundary is
+  bypassed.
 - Prompt injection or model manipulation that does not cross a dashboard,
   authentication, filesystem, credential, runtime-data, or external-exposure
   boundary.
