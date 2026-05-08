@@ -13,6 +13,14 @@ def _dashboard_script() -> str:
     return script
 
 
+def test_calendar_icon_css_separates_day_and_month():
+    css = Path("dashboard/static/dashboard.v1.css").read_text(encoding="utf-8")
+
+    assert re.search(r"\.calendar-icon\s*\{[^}]*gap:5px;", css, re.S)
+    assert re.search(r"\.calendar-icon-day\s*\{[^}]*line-height:\.82;", css, re.S)
+    assert re.search(r"\.calendar-icon-month\s*\{[^}]*line-height:\.9;", css, re.S)
+
+
 def test_dashboard_boot_tolerates_cards_without_heads(tmp_path):
     node = shutil.which("node")
     if not node:
@@ -562,6 +570,8 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
         renderMacroCalendar,
         changeMacroCalendarPage,
         changeNewsPage,
+        hasDisplayableNews,
+        renderIntelligence,
         macroCalendarEvents,
         macroCalendarPageRows,
         openConfigModal,
@@ -726,6 +736,16 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       assert.doesNotThrow(() => t.changeNewsPage('next'));
       assert.ok(elements.get('news-page-indicator').textContent.includes('Page 2 / 2'));
       assert.ok(elements.get('news-stack').innerHTML.includes('ETF flow update'));
+      assert.strictEqual(t.hasDisplayableNews({ newsCards: [{ title: 'Awaiting fresh crypto headlines' }] }), false);
+      assert.strictEqual(t.hasDisplayableNews({ rawNews: [{ title: 'Bitcoin fresh feed' }] }), true);
+      assert.doesNotThrow(() => t.renderIntelligence(
+        dashboardSample.status,
+        dashboardSample.cumulative,
+        dashboardSample.runtime,
+        { newsCards: [{ title: 'Awaiting fresh crypto headlines' }], rawNews: [] },
+      ));
+      assert.ok(elements.get('news-stack').innerHTML.includes('ETF Demand Strong'));
+      assert.ok(!elements.get('news-stack').innerHTML.includes('Awaiting fresh crypto headlines'));
     })().catch(err => {
       console.error(err);
       process.exit(1);

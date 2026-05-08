@@ -81,6 +81,7 @@ def test_stale_dashboard_intelligence_cache_marks_refreshing_when_already_busy(
     stale_cache = {
         "generatedAtUtc": "1970-01-01T00:00:00+00:00",
         "source": "cached",
+        "newsCards": [{"title": "Cached headline"}],
     }
 
     class FakeThread:

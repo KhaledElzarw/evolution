@@ -1534,6 +1534,22 @@ def _fallback_intelligence(status: dict, ohlcv: list[dict], news_items: list[dic
     return {"newsCards": cards, "regimeSignals": rows, "finalRegime": final, "source": "deterministic_fallback", "model": "", "error": error}
 
 
+def _has_displayable_news(intelligence: dict) -> bool:
+    if not isinstance(intelligence, dict):
+        return False
+    for key in ("newsCards", "rawNews"):
+        items = intelligence.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if title and title != "Awaiting fresh crypto headlines":
+                return True
+    return False
+
+
 def refresh_intelligence(state: dict, status: dict, ohlcv: list[dict]) -> dict:
     started = datetime.now(timezone.utc)
     cached = read_json(INTELLIGENCE_PATH)
@@ -1582,11 +1598,13 @@ def get_intelligence(state: dict, status: dict, ohlcv: list[dict], force: bool =
 
     if not force and cached.get("generatedAtUtc"):
         age = freshness_seconds(cached.get("generatedAtUtc"))
-        if age is not None and age < INTELLIGENCE_REFRESH_SECONDS:
+        cache_has_news = _has_displayable_news(cached)
+        if age is not None and age < INTELLIGENCE_REFRESH_SECONDS and cache_has_news:
             return cached
-        _start_background_refresh()
-        cached["refreshing"] = True
-        return cached
+        if cache_has_news:
+            _start_background_refresh()
+            cached["refreshing"] = True
+            return cached
     if not force:
         news_items = _fetch_news_items()
         news_items = _merge_news_history(news_items, cached.get("rawNews") if isinstance(cached, dict) else [])

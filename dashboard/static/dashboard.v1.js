@@ -1015,6 +1015,17 @@ function normalizeNewsCard(card, fromRaw = false) {
   };
 }
 
+function hasDisplayableNews(intelligence) {
+  const buckets = [
+    Array.isArray(intelligence && intelligence.newsCards) ? intelligence.newsCards : [],
+    Array.isArray(intelligence && intelligence.rawNews) ? intelligence.rawNews : [],
+  ];
+  return buckets.some(items => items.some(item => {
+    const title = String((item && item.title) || '').trim();
+    return title && title !== 'Awaiting fresh crypto headlines';
+  }));
+}
+
 function normalizedNewsCards(intelligence) {
   const cards = [];
   const seen = new Set();
@@ -1112,10 +1123,7 @@ function changeNewsPage(direction) {
 }
 
 function renderIntelligence(status, cumulative, runtime, intelligence) {
-  const hasIntelligenceNews = intelligence
-    && ((Array.isArray(intelligence.newsCards) && intelligence.newsCards.length)
-      || (Array.isArray(intelligence.rawNews) && intelligence.rawNews.length));
-  if (hasIntelligenceNews) {
+  if (hasDisplayableNews(intelligence)) {
     renderNewsCards(normalizedNewsCards(intelligence));
     return;
   }

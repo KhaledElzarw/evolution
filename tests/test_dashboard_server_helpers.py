@@ -360,6 +360,21 @@ def test_fallback_intelligence_scores_news_sentiment_without_padding():
     assert down_final["title"] == "Downtrend"
 
 
+def test_displayable_news_detection_ignores_placeholder_cards():
+    assert not dashboard_server._has_displayable_news(None)
+    assert not dashboard_server._has_displayable_news({})
+    assert not dashboard_server._has_displayable_news({
+        "newsCards": [{"title": "Awaiting fresh crypto headlines"}, None],
+        "rawNews": "bad",
+    })
+    assert dashboard_server._has_displayable_news({
+        "newsCards": [{"title": "Bitcoin ETF update"}],
+    })
+    assert dashboard_server._has_displayable_news({
+        "rawNews": [{"title": "Exchange crypto story"}],
+    })
+
+
 def test_gst_server_time_and_macro_calendar_update_daily():
     rendered_time = dashboard_server.format_gst_datetime(
         datetime(2026, 5, 7, 17, 30, 45, tzinfo=timezone.utc)
@@ -654,7 +669,7 @@ def test_fetch_news_items_parses_fake_rss_and_dedupes(monkeypatch):
 
     items = dashboard_server._fetch_news_items(
         limit=3,
-        now=datetime(2026, 5, 8, tzinfo=timezone.utc),
+        now=datetime(2026, 5, 8),
     )
     items_by_title = {item["title"]: item for item in items}
 
@@ -684,6 +699,80 @@ def test_merge_news_history_keeps_recent_cached_items_and_drops_old():
     )
 
     assert [item["title"] for item in merged] == ["Fresh story", "Cached recent"]
+
+
+def test_merge_news_history_handles_naive_now_bad_items_and_duplicates():
+    merged = dashboard_server._merge_news_history(
+        [
+            {
+                "title": "Fresh story",
+                "source": "RSS",
+                "url": "https://example.test/fresh",
+                "publishedUtc": "2026-05-08T10:00:00+00:00",
+            },
+            "bad",
+            {
+                "title": "Fresh story duplicate",
+                "source": "RSS",
+                "url": "https://example.test/fresh",
+                "publishedUtc": "2026-05-08T10:01:00+00:00",
+            },
+        ],
+        [
+            {
+                "title": "Cached recent",
+                "source": "Cache",
+                "publishedUtc": "2026-04-10T10:00:00+00:00",
+            },
+        ],
+        now=datetime(2026, 5, 8, 12, 0),
+    )
+
+    assert [item["title"] for item in merged] == ["Fresh story", "Cached recent"]
+
+
+def test_normalized_news_cards_filters_placeholders_duplicates_and_old_items(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(dashboard_server, "datetime", FixedDateTime)
+
+    cards = dashboard_server._normalized_news_cards({
+        "newsCards": [
+            {"title": "Awaiting fresh crypto headlines"},
+            {
+                "title": "Fresh story",
+                "source": "Cache",
+                "url": "https://example.test/fresh",
+                "publishedUtc": "2026-05-08T10:00:00+00:00",
+            },
+            {
+                "title": "Duplicate by URL",
+                "source": "Cache",
+                "url": "https://example.test/fresh",
+                "publishedUtc": "2026-05-08T10:01:00+00:00",
+            },
+            {
+                "title": "Old Bitcoin cycle note",
+                "source": "Cache",
+                "publishedUtc": "2025-12-01T12:00:00+00:00",
+            },
+        ],
+        "rawNews": [{"title": "Raw BTC feed", "source": "RSS"}],
+    })
+
+    assert [card["title"] for card in cards] == ["Fresh story", "Raw BTC feed"]
+
+
+def test_dashboard_ai_mode_label_reports_enabled_states():
+    assert dashboard_server._dashboard_ai_mode_label(True, {}) == "live"
+    assert dashboard_server._dashboard_ai_mode_label(True, {"stale": True}) == "stale"
+    assert dashboard_server._dashboard_ai_mode_label(
+        True,
+        {"dryRun": True, "shadowMode": True, "stale": True, "source": "deterministic_fallback"},
+    ) == "dry-run / shadow / stale (deterministic fallback)"
 
 
 def test_local_ai_assess_intelligence_uses_fake_ollama_and_openai(monkeypatch):
@@ -791,7 +880,11 @@ def test_refresh_and_get_intelligence_use_patched_boundaries(monkeypatch):
     assert failed["error"] == "local AI disabled in tests"
     assert len(writes) == 2
 
-    cached = {"generatedAtUtc": datetime.now(timezone.utc).isoformat(), "ok": True}
+    cached = {
+        "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
+        "newsCards": [{"title": "Cached headline"}],
+        "ok": True,
+    }
     monkeypatch.setattr(dashboard_server, "read_json", lambda path: cached)
     monkeypatch.setattr(
         dashboard_server,
@@ -803,6 +896,39 @@ def test_refresh_and_get_intelligence_use_patched_boundaries(monkeypatch):
     assert dashboard_server.get_intelligence({}, {}, [], force=True) == {
         "forced": True
     }
+
+
+def test_get_intelligence_refetches_fresh_placeholder_cache(monkeypatch):
+    cached = {
+        "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
+        "newsCards": [{"title": "Awaiting fresh crypto headlines"}],
+        "rawNews": [],
+    }
+    calls = []
+
+    monkeypatch.setattr(dashboard_server, "read_json", lambda path: cached)
+    monkeypatch.setattr(
+        dashboard_server,
+        "_fetch_news_items",
+        lambda: calls.append("fetch") or [{
+            "title": "Bitcoin ETF desks report fresh inflow",
+            "source": "Fake RSS",
+            "publishedUtc": "2026-05-08T10:00:00+00:00",
+        }],
+    )
+    monkeypatch.setattr(dashboard_server, "_intelligence_refreshing", True)
+
+    payload = dashboard_server.get_intelligence(
+        {"aiEnabled": False},
+        {"price": 100.0, "equityUsdt": 1000.0, "btc": 0.1},
+        [],
+    )
+
+    assert calls == ["fetch"]
+    assert payload["refreshing"] is True
+    assert payload["source"] == "deterministic_fallback"
+    assert payload["newsCards"][0]["title"] == "Bitcoin ETF desks report fresh inflow"
+    assert payload["rawNews"][0]["title"] == "Bitcoin ETF desks report fresh inflow"
 
 
 def test_build_market_payload_defaults_bad_limit_and_offset(monkeypatch):
