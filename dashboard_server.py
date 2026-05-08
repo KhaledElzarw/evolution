@@ -226,7 +226,7 @@ HTML = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tradebot Live Dashboard</title>
-  <link rel="stylesheet" href="/static/dashboard.v1.css?v=15">
+  <link rel="stylesheet" href="/static/dashboard.v1.css?v=16">
 </head>
 <body>
 <div class="wrap">
@@ -446,7 +446,7 @@ HTML = r'''<!doctype html>
     </div>
   </div>
 </div>
-<script src="/static/dashboard.v1.js?v=15"></script>
+<script src="/static/dashboard.v1.js?v=16"></script>
 </body>
 </html>'''
 
@@ -1681,6 +1681,7 @@ def _macro_calendar_events(now: datetime | None = None) -> list[dict]:
                     "year": event_gst.year,
                     "month": event_gst.month,
                     "monthName": event_gst.strftime("%b"),
+                    "day": event_gst.day,
                     "date": f"{event_gst:%b} {event_gst.day}, {event_gst.year}",
                     "time": f"{hour}:{event_gst:%M} {ampm} GST",
                     "sortTs": event_gst.timestamp(),
@@ -1745,28 +1746,56 @@ def _macro_calendar_status_page(
     return rows_source[start:start + page_size], total_pages, page, total_events
 
 
+def _macro_calendar_delta_label(event: dict, current: datetime) -> str:
+    event_ts = float(event.get("sortTs") or current.timestamp())
+    diff_seconds = event_ts - current.timestamp()
+    total_minutes = max(0, int(abs(diff_seconds) // 60))
+    hours, minutes = divmod(total_minutes, 60)
+    prefix = "-" if diff_seconds < 0 else ""
+    if hours > 99:
+        days, rem_hours = divmod(hours, 24)
+        return f"{prefix}{days}d{rem_hours}h"
+    return f"{prefix}{hours}h{minutes:02d}m"
+
+
+def _render_macro_calendar_badge(event: dict, current: datetime) -> str:
+    day = html_lib.escape(str(event.get("day") or ""))
+    month = html_lib.escape(str(event.get("monthName") or ""))
+    delta = html_lib.escape(_macro_calendar_delta_label(event, current))
+    title = html_lib.escape(f'{event.get("date", "")} {event.get("time", "")} - {delta}')
+    color = html_lib.escape(str(event.get("color") or "#1767c2"))
+    return (
+        f'<div class="calendar-icon" style="background:{color}" title="{title}">'
+        f'<span class="calendar-icon-day">{day}</span>'
+        f'<span class="calendar-icon-month">{month}</span>'
+        f'<span class="calendar-icon-delta">{delta}</span>'
+        "</div>"
+    )
+
+
 def _render_macro_calendar(status: str, now: datetime | None = None) -> str:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
     rows = []
     page_rows, _total_pages, page, _total_events = _macro_calendar_status_page(
-        _macro_calendar_events(now),
+        _macro_calendar_events(current),
         status,
     )
-    for idx, event in enumerate(page_rows, start=(page * MACRO_CALENDAR_PAGE_SIZE) + 1):
+    for event in page_rows:
         status = str(event["status"])
-        status_cls = "good" if status == "Completed" else "warn"
         dots = "".join(
             f'<span class="{"on" if i < int(event["impact"]) else ""}"></span>'
             for i in range(3)
         )
         rows.append(
             f'<div class="calendar-row {status.lower()}">'
-            f'<div class="calendar-icon" style="background:{html_lib.escape(str(event["color"]))}">{idx}</div>'
+            f'{_render_macro_calendar_badge(event, current)}'
             '<div class="calendar-main">'
             f'<strong>{html_lib.escape(str(event["title"]))}</strong>'
             f'<div class="calendar-summary">{html_lib.escape(status)} - {html_lib.escape(str(event["summary"]))}</div>'
             "</div>"
             f'<span class="calendar-meta">{html_lib.escape(str(event["date"]))}<br>{html_lib.escape(str(event["time"]))}</span>'
-            f'<span class="status-chip {status_cls}">{html_lib.escape(status)}</span>'
             '<div class="calendar-impact">'
             '<div class="calendar-meta" style="margin-bottom:5px">Impact</div>'
             f'<div class="impact-dots">{dots}</div>'

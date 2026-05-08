@@ -1200,6 +1200,7 @@ function macroCalendarEvents(serverTimeUtc) {
           year: eventGst.getUTCFullYear(),
           month: eventGst.getUTCMonth() + 1,
           monthName: eventGst.toLocaleDateString(undefined, { month: 'short' }),
+          day: eventGst.getUTCDate(),
           date: eventGst.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
           time: `${hour12}:${String(minute).padStart(2, '0')} ${ampm} GST`,
           sortTs: eventUtcMs,
@@ -1316,8 +1317,37 @@ function changeMacroCalendarPage(kind, direction) {
   renderMacroCalendar(stateUi.lastMacroCalendarServerTime);
 }
 
+function macroCalendarDeltaLabel(event, nowUtcMs) {
+  const eventMs = Number(event.sortTs || nowUtcMs || Date.now());
+  const diffMs = eventMs - Number(nowUtcMs || Date.now());
+  const totalMinutes = Math.max(0, Math.floor(Math.abs(diffMs) / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const prefix = diffMs < 0 ? '-' : '';
+  if (hours > 99) {
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    return `${prefix}${days}d${remHours}h`;
+  }
+  return `${prefix}${hours}h${String(minutes).padStart(2, '0')}m`;
+}
+
+function macroCalendarBadge(event, nowUtcMs) {
+  const delta = macroCalendarDeltaLabel(event, nowUtcMs);
+  const title = `${event.date || ''} ${event.time || ''} - ${delta}`;
+  return `
+    <div class="calendar-icon" style="background:${escapeHtml(event.color || '#1767c2')}" title="${escapeHtml(title)}">
+      <span class="calendar-icon-day">${escapeHtml(event.day || '')}</span>
+      <span class="calendar-icon-month">${escapeHtml(event.monthName || '')}</span>
+      <span class="calendar-icon-delta">${escapeHtml(delta)}</span>
+    </div>
+  `;
+}
+
 function renderMacroCalendar(serverTimeUtc) {
   stateUi.lastMacroCalendarServerTime = serverTimeUtc || stateUi.lastMacroCalendarServerTime || new Date().toISOString();
+  const current = new Date(stateUi.lastMacroCalendarServerTime);
+  const nowUtcMs = Number.isNaN(current.getTime()) ? Date.now() : current.getTime();
   const events = macroCalendarEvents(stateUi.lastMacroCalendarServerTime);
   Object.keys(MACRO_CALENDAR_KINDS).forEach(kind => {
     const prefix = MACRO_CALENDAR_KINDS[kind].prefix;
@@ -1334,15 +1364,14 @@ function renderMacroCalendar(serverTimeUtc) {
       renderMacroCalendarPager(kind, 1, 0);
       return;
     }
-    target.innerHTML = pageData.rows.map((ev, idx) => `
+    target.innerHTML = pageData.rows.map(ev => `
       <div class="calendar-row ${ev.status.toLowerCase()}">
-        <div class="calendar-icon" style="background:${ev.color}">${(pageData.page * MACRO_CALENDAR_PAGE_SIZE) + idx + 1}</div>
+        ${macroCalendarBadge(ev, nowUtcMs)}
         <div class="calendar-main">
           <strong>${escapeHtml(ev.title)}</strong>
           <div class="calendar-summary">${escapeHtml(ev.status)} - ${escapeHtml(ev.summary)}</div>
         </div>
         <span class="calendar-meta">${escapeHtml(ev.date)}<br>${escapeHtml(ev.time)}</span>
-        <span class="status-chip ${ev.status === 'Completed' ? 'good' : 'warn'}">${escapeHtml(ev.status)}</span>
         <div class="calendar-impact"><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots">${Array.from({ length: 3 }, (_, i) => `<span class="${i < ev.impact ? 'on' : ''}"></span>`).join('')}</div></div>
       </div>
     `).join('');

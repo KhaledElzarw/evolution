@@ -453,11 +453,26 @@ def test_gst_server_time_and_macro_calendar_update_daily():
         "Upcoming",
         datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc)
     )
+    naive_rendered_html = dashboard_server._render_macro_calendar(
+        "Completed",
+        datetime(2026, 5, 7, 13, 0, 0)
+    )
     assert "US Data Window" in completed_html
+    assert "US Data Window" in naive_rendered_html
     assert "Completed - US data window passed" in completed_html
     assert "Upcoming - Watch ETF flow" in upcoming_html
     assert completed_html.count('class="calendar-row') == 10
     assert upcoming_html.count('class="calendar-row') == 10
+    assert 'class="status-chip' not in completed_html
+    assert 'class="status-chip' not in upcoming_html
+    assert 'class="calendar-icon-day">7</span>' in completed_html
+    assert 'class="calendar-icon-month">May</span>' in completed_html
+    assert 'class="calendar-icon-delta">-0h30m</span>' in completed_html
+    assert 'class="calendar-icon-delta">0h30m</span>' in upcoming_html
+    assert dashboard_server._macro_calendar_delta_label(
+        {"sortTs": datetime(2026, 5, 20, 13, 0, 0, tzinfo=timezone.utc).timestamp()},
+        datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc),
+    ) == "13d0h"
 
 
 def test_format_and_server_render_helpers_cover_empty_and_value_rows():
