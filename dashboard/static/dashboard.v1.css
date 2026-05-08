@@ -363,12 +363,15 @@
     .impact-dots span.on { background:var(--btc); }
     .operator-section { margin-top:4px; }
     @media (max-width: 1200px) {
-      .chart-card, .intelligence-card, .regime-card, .macro-card, .events-card, .ai-decisions-card, .orders-card, .config-card, .status-footer { grid-column: span 24 !important; }
+      .chart-card, .intelligence-card, .regime-card, .events-card, .ai-decisions-card, .orders-card, .config-card, .status-footer { grid-column: span 24 !important; }
       .command-strip { grid-template-columns:1fr 1fr; }
       .trading-state-main, .metric { border-bottom:1px solid var(--line); }
       .control-strip, .regime-grid { grid-template-columns: 1fr; }
       .ai-decision-topline { grid-template-columns:1fr; }
       .agent-chat-toolbar { grid-template-columns:1fr 1fr; }
+    }
+    @media (max-width: 900px) {
+      .macro-card { grid-column: span 24 !important; }
     }
     @media (max-width: 720px) {
       .command-strip, .control-strip, .config-grid, .calendar-row, .calendar-toolbar, .ai-decision-chat-grid, .agent-chat-toolbar, .agent-composer { grid-template-columns: 1fr; }
