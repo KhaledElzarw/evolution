@@ -1,5 +1,7 @@
 # Tradebot
 
+AI-assisted local Python product prototype for paper/testnet workflow automation, dashboard operations, SQLite persistence, runtime monitoring, security controls and optional advisory AI review.
+
 Local-first Binance Spot trading automation with SQLite persistence, dashboard
 operations, and optional AI review. Built for cautious paper and Binance Spot
 testnet-oriented workflows, not for casual live-risk experimentation.
