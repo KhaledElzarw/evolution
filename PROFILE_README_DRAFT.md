@@ -1,0 +1,1 @@
+Senior product and transformation professional based in the UAE, focused on enterprise workflow platforms, regulated digital banking, BI/analytics products, AI-assisted automation and operational excellence. I use GitHub as a hands-on lab for product prototyping, workflow experimentation, dashboard operations and local AI tooling.
