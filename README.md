@@ -1,5 +1,7 @@
 # Tradebot
 
+> Reviewing this repo as product evidence? Start with **[SHOWCASE.md](SHOWCASE.md)**.
+
 AI-assisted local Python product prototype for paper/testnet workflow automation, dashboard operations, SQLite persistence, runtime monitoring, security controls and optional advisory AI review.
 
 Local-first Binance Spot trading automation with SQLite persistence, dashboard
