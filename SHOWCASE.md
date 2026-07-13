@@ -55,6 +55,20 @@ Design choices worth noting:
 
 This is a **local AI assisted trading bot prototype**, single-operator, running against paper/testnet workflows. It is not a commercial product with customers (yet), and the current P&L reflects a live learning environment. What it evidences is the thing that transfers: taking an AI-agentic product from zero to a running, observable, controllable, tested system — the discovery, specification, guardrail design, evaluation and operational discipline that agentic product ownership requires.
 
+## The running system
+
+**Feature #1 Operating Dashboard** - Portfilio and current marketing tracking price with top news dirving price and impact gaguge.
+
+![1_Live_Operating_Dashboard](docs/live_screenshots/1_Live_Operating_Dashboard.png)
+
+**Operator dashboard** — live KPIs, regime signals and macro intelligence in one control surface:
+
+![Live operating dashboard](docs/screenshots/live-dashboard.png)
+
+**Human-in-the-loop override** — prompt the agent or override its configuration directly:
+
+![Assisted decisioning and manual override](docs/screenshots/manual-override.png)
+
 ## Where to look
 
 - `README.md` — operator setup, safety model, architecture
