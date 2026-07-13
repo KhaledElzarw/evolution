@@ -57,23 +57,23 @@ This is a **local AI assisted trading bot prototype**, single-operator, running 
 
 ## The running system
 
-**Feature #1: Operating Dashboard** - Portfilio and current marketing tracking price with top news dirving price and impact gaguge
+**Feature #1: Operating Dashboard** - Portfolio and current market tracking price with top news driving price and impact gauge
 
 ![1 Live_Operating_Dashboard](live_screenshots/1_Live_Operating_Dashboard.png)
 
-**Feature #2: Portfolio vs Current Market Regime & Sentiment** — Live analysis to the current porfilio and a snapshot of the how portfolio is performing aganist market regime
+**Feature #2: Portfolio vs Current Market Regime & Sentiment** — Live analysis to the current portfolio and a snapshot of the how portfolio is performing against market regime
 
 ![2 Portfolio_vs_Current_Market_Sentiment](live_screenshots/2_Portfolio_vs_Current_Market_Sentiment.png)
 
-**Feature #3: News & Macro Intelligence** — Stay up to date with the upcoming macro econmic drivers with impact gauge
+**Feature #3: News & Macro Intelligence** — Stay up to date with the upcoming macro economic drivers with impact gauge
 
 ![3 News and_Macro Intelligence](live_screenshots/3_New_and_Macro_Intelligence.png)
 
-**Feature #4: AI Decsioning Committee** — 6 AI Agents pre-configured to analyze the market from different prespectives and vote on strategy decisions
+**Feature #4: AI Decisioning Committee** — 6 AI Agents pre-configured to analyze the market from different perspectives and vote on strategy decisions
 
 ![4 AI Committee](live_screenshots/4_AI_Committee.png)
 
-**Feature #5: Human in the Loop** — Configure or Speak directly to the AI Decsioning Committee to understand or influence a decision
+**Feature #5: Human in the Loop** — Configure or Speak directly to the AI Decisioning Committee to understand or influence a decision
 
 ![5 AI Decision Agent](live_screenshots/5_AI_Decision_Agent.png)
 
