@@ -278,7 +278,7 @@ HTML = r'''<!doctype html>
           <div class="sticky-summary" id="sticky-summary"></div>
         </div>
         <div class="control-strip">
-          <div class="mini-control"><span class="mini-icon">M</span><div><div class="label">Mode</div><strong id="state-mode">Grid + Local AI</strong></div></div>
+          <div class="mini-control mode-control"><span class="mini-icon">M</span><div><div class="label">Mode</div><div class="mode-toggle-group"><button class="btn mode-toggle segmented-toggle" type="button" data-mode="scalpy" id="mode-scalpy">Scalping</button><button class="btn mode-toggle segmented-toggle" type="button" data-mode="fatty" id="mode-fatty">Swinging</button><button class="btn mode-toggle segmented-toggle" type="button" data-mode="ai_optimized" id="mode-ai">AI Optimized</button></div></div></div>
           <div class="mini-control"><span class="mini-icon">R</span><div><div class="label">Risk</div><strong id="state-risk" class="positive">Normal</strong></div></div>
           <div class="mini-control"><span class="mini-icon">E</span><div><div class="label">Exposure</div><strong id="state-exposure">--</strong></div></div>
           <div class="mini-control"><span class="mini-icon">N</span><div><div class="label">Next Action</div><strong id="state-action">Wait</strong></div></div>
@@ -471,6 +471,31 @@ HTML = r'''<!doctype html>
     </div>
   </div>
 </div>
+<script>
+(function(){
+  const map = { scalpy: 'Scalping', fatty: 'Swinging', ai_optimized: 'AI Optimized', flexy: 'AI Optimized' };
+  const input = document.getElementById('cfg-gridMode');
+  const buttons = Array.from(document.querySelectorAll('.mode-toggle'));
+  if (!input || !buttons.length) return;
+  function sync(value) {
+    const v = (value || '').toLowerCase();
+    buttons.forEach(btn => {
+      const active = btn.dataset.mode === v || (v === 'flexy' && btn.dataset.mode === 'ai_optimized');
+      btn.classList.toggle('active', active);
+    });
+    const label = map[v] || 'AI Optimized';
+    const stateMode = document.getElementById('state-mode');
+    if (stateMode) stateMode.textContent = label;
+  }
+  sync(input.value);
+  buttons.forEach(btn => btn.addEventListener('click', () => {
+    input.value = btn.dataset.mode;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    sync(btn.dataset.mode);
+  }));
+})();
+</script>
 <script src="/static/dashboard.v1.js?v=24"></script>
 </body>
 </html>'''
@@ -1271,14 +1296,17 @@ def _signed_class(value) -> str:
 
 
 def dashboard_mode_label(state: dict) -> str:
-    ai_enabled = state.get("aiEnabled", True) is not False
-    suffix = "Local AI" if ai_enabled else "Rules"
+    custom = str(state.get("dashboardModeLabel") or "").strip()
+    if custom:
+        return custom
     mode = str(state.get("gridMode") or "").strip().lower()
-    if mode in {"scalpy", "fatty"}:
-        return f"{mode.capitalize()} + {suffix}"
-    if mode in {"flexy", "ai_optimized"}:
-        return "Optimized AI" if ai_enabled else "Rules"
-    return f"Grid + {suffix}"
+    mapping = {
+        "scalpy": "Scalping",
+        "fatty": "Swinging",
+        "ai_optimized": "AI Optimized",
+        "flexy": "AI Optimized",
+    }
+    return mapping.get(mode, "AI Optimized")
 
 
 def _strip_html(text: str) -> str:
@@ -1427,7 +1455,7 @@ def _deterministic_regime_rows(status: dict, ohlcv: list[dict], intelligence_err
     avg_range = sum(ranges) / len(ranges) if ranges else 0.0
     price = float(status.get("price") or (last or {}).get("close") or 0.0)
     vol_pct = avg_range / price if price > 0 else 0.0
-    equity = float(status.get("equityUsdt") or 0.0)
+    equity = float(state.get("dashboardEquityOverrideUsdt") or status.get("equityUsdt") or 0.0)
     exposure = (float(status.get("btc") or 0.0) * price / equity) if equity > 0 else 0.0
     trend_status = "Range" if abs(change) < 0.015 else ("Uptrend" if change > 0 else "Downtrend")
     rows = [
@@ -1487,7 +1515,7 @@ def _local_ai_assess_intelligence(state: dict, status: dict, ohlcv: list[dict], 
                 "stream": False,
                 "format": "json",
                 "think": False,
-                "options": {"temperature": 0.1, "num_predict": 700},
+                "options": {"temperature": 0.0, "num_predict": 1200, "response_format": {"type": "json_object"}},
             },
         )
         response.raise_for_status()
@@ -1498,7 +1526,7 @@ def _local_ai_assess_intelligence(state: dict, status: dict, ohlcv: list[dict], 
             f"{base_url}/chat/completions",
             timeout=timeout,
             headers={"Authorization": "Bearer local", "Content-Type": "application/json"},
-            json={"model": model, "temperature": 0.1, "max_tokens": 700, "stream": False, "messages": messages},
+            json={"model": model, "temperature": 0.0, "max_tokens": 1200, "stream": False, "response_format": {"type": "json_object"}, "messages": messages},
         )
         response.raise_for_status()
         data = response.json()
@@ -2132,7 +2160,7 @@ def render_initial_dashboard_html(interval_override: str | None = None) -> str:
     intelligence = get_intelligence(state, status, ohlcv)
     orders = ((runtime.get("grid") or {}).get("orders") or [])
     position = status.get("position") or {}
-    equity = float(status.get("equityUsdt") or 0.0)
+    equity = float(state.get("dashboardEquityOverrideUsdt") or status.get("equityUsdt") or 0.0)
     price = float(status.get("price") or 0.0)
     btc_value = float(status.get("btc") or 0.0) * price
     exposure = (btc_value / equity) if equity > 0 else 0.0
@@ -2183,6 +2211,7 @@ def render_initial_dashboard_html(interval_override: str | None = None) -> str:
     final_copy = html_lib.escape(str(final_regime.get("copy") or "Choppy price action within established range. Maintain grid discipline and capital efficiency."))
     generated = intelligence.get("generatedAtUtc") or ""
     next_refresh = intelligence.get("nextRefreshAtUtc") or ""
+    mode_key = str(state.get("gridMode") or "").strip().lower()
     intel_note = f'{html_lib.escape(str(intelligence.get("source") or "local"))} - next {html_lib.escape(str(next_refresh)[11:16] or "30m")}'
     page = HTML
     replacements = {
@@ -2191,7 +2220,9 @@ def render_initial_dashboard_html(interval_override: str | None = None) -> str:
         '<button class="btn" type="button" id="top-timeframe">1m</button>': f'<a class="btn" id="top-timeframe" href="/?interval={html_lib.escape(interval)}">{html_lib.escape(SUPPORTED_INTERVALS[interval]["label"])}</a>',
         'id="trading-state-label">LIVE / AI-GATED</div>': f'id="trading-state-label">{html_lib.escape(state_label)}</div>',
         'id="sticky-summary"></div>': f'id="sticky-summary">{metrics_html}</div>',
-        'id="state-mode">Grid + Local AI</strong>': f'id="state-mode">{html_lib.escape(mode)}</strong>',
+        'id="mode-scalpy">Scalping</button>': f'id="mode-scalpy" class="btn mode-toggle{" active" if mode_key == "scalpy" else ""}">Scalping</button>',
+        'id="mode-fatty">Swinging</button>': f'id="mode-fatty" class="btn mode-toggle{" active" if mode_key == "fatty" else ""}">Swinging</button>',
+        'id="mode-ai">AI Optimized</button>': f'id="mode-ai" class="btn mode-toggle{" active" if mode_key in {"ai_optimized", "flexy"} else ""}">AI Optimized</button>',
         'id="state-risk" class="positive">Normal</strong>': f'id="state-risk" class="{_signed_class(1 if risk != "High" else -1)}">{html_lib.escape(risk)}</strong>',
         'id="state-exposure">--</strong>': f'id="state-exposure">{_fmt_pct(exposure)}</strong>',
         '<h2>BTC/USD · 1H · INDEX</h2>': f'<h2>BTC/USD · {html_lib.escape(SUPPORTED_INTERVALS[interval]["label"])} · INDEX</h2>',
