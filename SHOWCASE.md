@@ -59,7 +59,7 @@ This is a **local AI assisted trading bot prototype**, single-operator, running 
 
 **Feature #1 Operating Dashboard** - Portfilio and current marketing tracking price with top news dirving price and impact gaguge.
 
-![1_Live_Operating_Dashboard](docs/live_screenshots/1_Live_Operating_Dashboard.png)
+![1_Live_Operating_Dashboard](live_screenshots/1_Live_Operating_Dashboard.png)
 
 **Operator dashboard** — live KPIs, regime signals and macro intelligence in one control surface:
 
