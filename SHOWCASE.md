@@ -53,7 +53,7 @@ Design choices worth noting:
 
 ## What this is — and honestly, what it isn't
 
-This is a **personal local AI assisted trading prototype**, single-operator, running against paper/testnet workflows. It is not a commercial product with customers (yet), and the current P&L reflects a live learning environment. What it evidences is the thing that transfers: taking an AI-agentic product from zero to a running, observable, controllable, tested system — the discovery, specification, guardrail design, evaluation and operational discipline that agentic product ownership requires.
+This is a **local AI assisted trading bot prototype**, single-operator, running against paper/testnet workflows. It is not a commercial product with customers (yet), and the current P&L reflects a live learning environment. What it evidences is the thing that transfers: taking an AI-agentic product from zero to a running, observable, controllable, tested system — the discovery, specification, guardrail design, evaluation and operational discipline that agentic product ownership requires.
 
 ## Where to look
 
