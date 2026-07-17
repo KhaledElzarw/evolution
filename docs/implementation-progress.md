@@ -57,7 +57,7 @@ when its acceptance gate passes with recorded command output.
 | 8 | Daily & weekly learning | **Done** | `domain/lessons.py`, `application/lessons.py`, `reports/renderer.py`; 22 tests (schema-enforced hypothesis labelling, committee cannot reorder rank or spare a loser, engine facts override model, idempotency, degraded output, atomic rendering) |
 | 9 | Evolution, novelty & promotion | **Done** | `domain/{evaluations,lineage}.py`, `application/{evolution,liquidation,promotion,novelty}.py`; `docs/evolution-policy.md`; 55 tests (all replacement scenarios, ban reuse, roll-forward, shortage rollback, invariants, AST fingerprinting, novelty/mutation thresholds, lineage graph) |
 | 10 | Dark Horse | **Done** | `domain/dark_horse.py`, `application/dark_horse.py`; `docs/dark-horse.md`; 21 tests (five-domain committee, explicit missing/stale degradation, no-shorting type, elimination exemption via Phase 9 engine, wallet continuity across upgrade/rollback) |
-| 11 | API & dashboard rewrite | Not started | — |
+| 11 | API & dashboard rewrite | **Core done** | `tradebot/api/{security,app,views}.py`, `dashboard/static/dashboard.v2.js`; 44 tests (fail-closed mutations, redacted errors, bind guard, CSP headers, 19 v2 routes, zero unsafe DOM sinks, URL vetting) |
 | 12 | Operations, observability & CI | Not started | — |
 | 13 | Independent verification & cleanup | Not started | — |
 
@@ -129,3 +129,34 @@ when its acceptance gate passes with recorded command output.
   is stable and leaves no .tmp files.
 - 22 new tests. New-package suite **253 passed**; ruff clean; full suite
   **656 passed / same 11 pre-existing failures**.
+
+### Phase 11 — evidence (actual)
+- **A12 closed**: every mutation requires a Bearer token and fails CLOSED —
+  no token / wrong token -> 401, cross-origin -> 403, token in query string ->
+  400, empty control payload -> 422. `token_matches` is constant-time and
+  returns False on any missing value.
+- **A13 closed**: an endpoint raising `RuntimeError("secret db path
+  /srv/prod/tradebot.db")` returns a generic message + 16-char correlation id;
+  the path and exception type are provably absent from the response body.
+- **A14 closed**: `dashboard.v2.js` contains **zero** innerHTML / outerHTML /
+  insertAdjacentHTML / document.write / eval / new Function in executable code
+  (v1's 26 innerHTML uses remain, asserted as the baseline). All untrusted
+  values render via `textContent`; links are parsed with `URL` and admit only
+  `https:` (plus loopback `http:`), with `noopener noreferrer`.
+- **A09 closed at the UI/API surface**: no aiBaseUrl/allowlist/model-config
+  editing exists in either the JS or the API (POST/PUT probes return 404/405).
+- Remote bind without a >=32-char token refuses startup (`InsecureBindError`);
+  loopback is the default.
+- CSP/nosniff/no-referrer/DENY/no-store headers on every response; oversized
+  bodies rejected with 413.
+- Active vs shadow strictly separated: summary reports 130,000.00 active and
+  120,000.00 shadow virtual in distinct sections; filters return 12/12/1/25.
+- Dependencies added with documented purpose: fastapi, uvicorn, httpx (+dev:
+  pytest-asyncio, hypothesis, mypy, bandit, pip-audit).
+- 44 new tests. New-package suite **297 passed**; `node --check` OK; ruff clean;
+  full suite **700 passed / same 11 pre-existing failures**.
+
+### Known gap (Phase 11)
+- The v1 dashboard/server remain in the tree; removing them is Phase 13 cleanup.
+- Node/jsdom behavioural DOM tests + Playwright smoke are Gate 5 work (Phase 12);
+  the always-on Python-driven static safety floor is in place now.

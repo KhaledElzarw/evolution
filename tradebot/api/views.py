@@ -1,0 +1,223 @@
+"""Read-model protocol + an in-memory implementation for the API.
+
+Keeps the HTTP layer free of persistence details (dependency injection): the
+production adapter reads from the canonical database; tests inject a fake.
+
+Active and shadow totals are computed separately here and never mixed — the
+API cannot accidentally report a combined figure.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Protocol
+
+from ..application.portfolio import (
+    ACTIVE_BASELINE,
+    Portfolio,
+    display_name,
+)
+
+
+class PortfolioView(Protocol):  # pragma: no cover - structural protocol
+    def readiness(self) -> dict: ...
+    def portfolio_summary(self) -> dict: ...
+    def wallets(self, kind: str | None = None) -> list[dict]: ...
+    def wallet(self, wallet_id: str) -> dict | None: ...
+    def wallet_equity(self, wallet_id: str) -> list[dict]: ...
+    def wallet_orders(self, wallet_id: str) -> list[dict]: ...
+    def wallet_fills(self, wallet_id: str) -> list[dict]: ...
+    def wallet_ledger(self, wallet_id: str) -> list[dict]: ...
+    def strategies(self) -> list[dict]: ...
+    def strategy(self, strategy_version_id: str) -> dict | None: ...
+    def lineage(self) -> list[dict]: ...
+    def evaluations(self, window: str | None = None) -> list[dict]: ...
+    def promotions(self) -> list[dict]: ...
+    def reports_daily(self, date: str | None = None) -> list[dict]: ...
+    def reports_weekly(self, window: str | None = None) -> list[dict]: ...
+    def quarantines(self) -> list[dict]: ...
+    def data_sources(self) -> list[dict]: ...
+    def llm_status(self) -> dict: ...
+    def refresh_daily(self, date: str) -> dict: ...
+
+
+@dataclass(slots=True)
+class InMemoryPortfolioView:
+    """Read model over an in-memory Portfolio (used by tests and the seeder)."""
+
+    portfolio: Portfolio
+    mark_price: Decimal
+    now: dt.datetime
+    archived_lifetime_pnl: Decimal = Decimal("0.00")
+    llm_healthy: bool = True
+    llm_model_id: str = "unknown"
+    source_status: list[dict] = field(default_factory=list)
+    daily_reports: list[dict] = field(default_factory=list)
+    weekly_reports: list[dict] = field(default_factory=list)
+    quarantine_records: list[dict] = field(default_factory=list)
+    lineage_edges: list[dict] = field(default_factory=list)
+    promotion_records: list[dict] = field(default_factory=list)
+    evaluation_records: list[dict] = field(default_factory=list)
+
+    # -- system --------------------------------------------------------------
+
+    def readiness(self) -> dict:
+        return {
+            "ready": True,
+            "database": "ok",
+            "market_data": "ok",
+            "local_model": "ok" if self.llm_healthy else "degraded",
+            "strategy_workers": "ok",
+        }
+
+    def llm_status(self) -> dict:
+        return {
+            "provider": "llama_cpp",
+            "status": "ok" if self.llm_healthy else "degraded",
+            "model_id": self.llm_model_id,
+        }
+
+    def data_sources(self) -> list[dict]:
+        return list(self.source_status)
+
+    # -- portfolio -----------------------------------------------------------
+
+    def portfolio_summary(self) -> dict:
+        """Active and shadow figures are strictly separate sections."""
+
+        active_equity = self.portfolio.active_equity(self.mark_price)
+        return {
+            "active": {
+                "starting_capital": str(ACTIVE_BASELINE),
+                "current_equity": str(active_equity),
+                "net_pnl": str(active_equity - ACTIVE_BASELINE),
+                "archived_lifetime_net_pnl": str(self.archived_lifetime_pnl),
+                "wallet_count": len(self.portfolio.active),
+            },
+            "shadow": {
+                "virtual_equity": str(self.portfolio.shadow_equity(self.mark_price)),
+                "wallet_count": len(self.portfolio.shadow),
+                "note": "virtual evaluation capital; excluded from active totals",
+            },
+            "dark_horse": self._dark_horse_summary(),
+            "mark_price": str(self.mark_price),
+        }
+
+    def _dark_horse_summary(self) -> dict | None:
+        slot = self.portfolio.dark_horse
+        if slot is None:
+            return None
+        equity = slot.wallet.equity(self.mark_price)
+        return {
+            "wallet_id": slot.wallet.wallet_id,
+            "display_name": display_name(slot, self.now),
+            "current_equity": str(equity),
+            "lifetime_net_pnl": str(equity - Decimal("10000.00")),
+        }
+
+    # -- wallets -------------------------------------------------------------
+
+    def _slots(self):
+        out = [(s, "active") for s in self.portfolio.active]
+        out += [(s, "shadow") for s in self.portfolio.shadow]
+        if self.portfolio.dark_horse is not None:
+            out.append((self.portfolio.dark_horse, "dark_horse"))
+        return out
+
+    def _wallet_dict(self, slot, kind: str) -> dict:
+        w = slot.wallet
+        equity = w.equity(self.mark_price)
+        return {
+            "wallet_id": w.wallet_id,
+            "display_name": display_name(slot, self.now),
+            "kind": kind,
+            "strategy_name": slot.strategy_name,
+            "strategy_version_id": slot.strategy_version_id,
+            "days_since_assignment_changed": max(
+                0, (self.now - slot.activated_at).days),
+            "starting_equity": "10000.00",
+            "current_equity": str(equity),
+            "lifetime_net_pnl": str(equity - Decimal("10000.00")),
+            "btc_quantity": str(w.base_qty),
+            "usdt_quantity": str(w.quote_cash),
+            "realized_pnl": str(w.realized_pnl),
+            "status": "active",
+            "health": "ok",
+        }
+
+    def wallets(self, kind: str | None = None) -> list[dict]:
+        return [self._wallet_dict(s, k) for s, k in self._slots()
+                if kind is None or k == kind]
+
+    def wallet(self, wallet_id: str) -> dict | None:
+        for slot, kind in self._slots():
+            if slot.wallet.wallet_id == wallet_id:
+                return self._wallet_dict(slot, kind)
+        return None
+
+    def wallet_equity(self, wallet_id: str) -> list[dict]:
+        found = self.wallet(wallet_id)
+        if found is None:
+            return []
+        return [{"time": self.now.isoformat(), "equity": found["current_equity"]}]
+
+    def wallet_orders(self, wallet_id: str) -> list[dict]:
+        return []
+
+    def wallet_fills(self, wallet_id: str) -> list[dict]:
+        return []
+
+    def wallet_ledger(self, wallet_id: str) -> list[dict]:
+        return []
+
+    # -- strategies / evolution ---------------------------------------------
+
+    def strategies(self) -> list[dict]:
+        seen: dict[str, dict] = {}
+        for slot, kind in self._slots():
+            seen.setdefault(slot.strategy_version_id, {
+                "strategy_version_id": slot.strategy_version_id,
+                "name": slot.strategy_name,
+                "origin": "builtin",
+                "kind": kind,
+            })
+        return list(seen.values())
+
+    def strategy(self, strategy_version_id: str) -> dict | None:
+        for s in self.strategies():
+            if s["strategy_version_id"] == strategy_version_id:
+                return s
+        return None
+
+    def lineage(self) -> list[dict]:
+        return list(self.lineage_edges)
+
+    def evaluations(self, window: str | None = None) -> list[dict]:
+        if window is None:
+            return list(self.evaluation_records)
+        return [e for e in self.evaluation_records
+                if e.get("evaluation_window") == window]
+
+    def promotions(self) -> list[dict]:
+        return list(self.promotion_records)
+
+    def quarantines(self) -> list[dict]:
+        return list(self.quarantine_records)
+
+    # -- reports -------------------------------------------------------------
+
+    def reports_daily(self, date: str | None = None) -> list[dict]:
+        if date is None:
+            return list(self.daily_reports)
+        return [r for r in self.daily_reports if r.get("date") == date]
+
+    def reports_weekly(self, window: str | None = None) -> list[dict]:
+        if window is None:
+            return list(self.weekly_reports)
+        return [r for r in self.weekly_reports
+                if r.get("evaluation_window") == window]
+
+    def refresh_daily(self, date: str) -> dict:
+        return {"queued": True, "date": date}
