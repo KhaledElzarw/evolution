@@ -10,7 +10,7 @@ when its acceptance gate passes with recorded command output.
 | 0 | Full local audit & baseline | **Done (audit gate)** | `docs/audits/evolutionary-platform-baseline.md`; baseline 403 pass / 11 fail / 98% cov / ruff 2 |
 | 1 | Correct accounting & candle-fill defects (A01/A02) | **Core done** | `tradebot/domain/ledger.py`, `application/execution.py`; `test_ledger.py::test_a02_fee_not_double_counted_over_roundtrip`, `test_execution.py::test_a01_same_candle_cannot_fill_twice` |
 | 2 | Package & configuration foundation | **Core done** | `tradebot/{domain,application,...}` skeleton; `tradebot/domain/money.py` Decimal primitives; `test_architecture.py` import-direction gate |
-| 3 | Database v2 & legacy migration | In progress | — |
+| 3 | Database v2 & legacy migration | **Schema/UoW core done; legacy import pending** | `infrastructure/database/models.py`, `unit_of_work.py`; `test_database.py` (5 tests: idempotent migration, FK unique idempotency key, check constraints, atomic rollback) |
 | 4 | Shared market clock & execution simulator | **Core done** | `domain/market.py` immutable snapshot; `application/execution.py` filters + watermark + iteration-order independence (`test_execution.py`) |
 
 ### Phase 1/2/4 core — evidence (actual)
