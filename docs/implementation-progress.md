@@ -34,8 +34,25 @@ when its acceptance gate passes with recorded command output.
   rejection, manifest schema (BTCUSDT-only) enforced.
 - Windows limitation documented: POSIX rlimits unavailable; parent timeout is the backstop.
 - Full suite: **448 passed, 11 failed** (same pre-existing platform failures; no regressions).
+
+### Phase 6 — evidence (actual)
+- 12 built-in strategies, each with its own `signal()` implementation and a distinct
+  conceptual family (asserted by `test_strategies_are_materially_distinct`).
+- Contract battery per strategy: shape, warmup guard, unclosed-candle guard,
+  bit-deterministic replay, no-lookahead (62 tests).
+- Strategy-specific signal tests: each characteristic entry fires on a crafted
+  scenario; falling-knife veto, volume-confirmation rejection, chandelier stop,
+  regime subpolicy attribution etc. (19 tests).
+- Portfolio seeding: 12 active + 12 shadow + Dark Horse; active baseline exactly
+  130,000.00 USDT with shadow 120,000.00 kept separate; display naming rule
+  `StrategyName_DaysSinceStrategyChanged` with fixed `Dark Horse` (5 tests).
+- 25-wallet shared-snapshot replay over 300 deterministic candles: fills occur,
+  invariants hold, run is bit-reproducible, active/shadow ledgers for the same
+  strategy evolve identically (fairness), wallet isolation proven (4 tests).
+- New-package suite: **135 passed**; ruff clean; full suite **538 passed / same 11
+  pre-existing failures**.
 | 5 | Plugin SDK & isolation | **Done** | `domain/strategies.py` SDK; `plugins/{validator,worker,worker_main,registry}.py`; `docs/strategy-plugin-sdk.md`; 19 tests (AST policy, traversal/symlink/size limits, real subprocess timeout kill, env-sanitization leak probe, quarantine) |
-| 6 | Initial 12 strategies & shadow pool | Not started | — |
+| 6 | Initial 12 strategies & shadow pool | **Done** | `tradebot/strategies/` (12 modules + indicators + base); `application/portfolio.py`; 90 tests incl. 25-wallet deterministic replay, bit-reproducibility, active/shadow fairness, naming rule, 130k/120k split |
 | 7 | DataBroker & local llama.cpp client | Not started | — |
 | 8 | Daily & weekly learning | Not started | — |
 | 9 | Evolution, novelty & promotion | Not started | — |
