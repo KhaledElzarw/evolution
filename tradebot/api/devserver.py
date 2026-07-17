@@ -4,14 +4,24 @@ Seeds an in-memory 25-wallet portfolio (12 active + 12 shadow + Dark Horse),
 replays a deterministic synthetic market through the real ExecutionService so
 the wallets hold genuine balances, then serves the API + dashboard.
 
+Market data is either:
+
+* ``--live``  — real BTCUSDT candles from Binance's public endpoint. **No API
+  key**: public market data needs none, and requiring exchange credentials for a
+  paper platform was audit finding A10. Real exchange filters (tick/lot/notional)
+  are fetched too, and the in-progress candle is excluded. If live data cannot be
+  obtained the server **fails loudly** rather than silently serving fake prices.
+* default — a seeded synthetic walk, touching no network.
+
 This is a DEV harness, not a production entrypoint:
 
-* the market is a seeded synthetic walk, not live data (no network is touched);
 * state is in-memory and vanishes on exit — no runtime database is created or
   modified;
-* it binds loopback only.
+* it binds loopback only;
+* it backfills history once at startup and then re-marks equity every 15s from
+  the newest closed candle; it does not re-run strategy decisions on new bars.
 
-Run:  python -m tradebot.api.devserver --port 5555
+Run:  python -m tradebot.api.devserver --port 5555 --live
 """
 
 from __future__ import annotations
@@ -19,9 +29,16 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import random
+import threading
+import time
 from decimal import Decimal
 
-from ..application.execution import ExecutionService, OrderIntent, OrderType
+from ..application.execution import (
+    ExecutionModel,
+    ExecutionService,
+    OrderIntent,
+    OrderType,
+)
 from ..application.portfolio import seed_portfolio
 from ..domain.market import MarketSnapshot
 from ..domain.strategies import StrategyContext, WalletView
@@ -30,7 +47,11 @@ from .app import create_app
 from .security import ApiSettings
 from .views import InMemoryPortfolioView
 
-DEV_TOKEN = "dev-local-token-not-a-secret-0123456789"
+# nosec B105 - not a credential: a fixed, published, loopback-only dev token so
+# the operator can exercise the guarded mutation routes. Real deployments read
+# TRADEBOT_API_TOKEN from the environment, and a non-loopback bind refuses to
+# start without a strong one (see api/security.py::validate_startup).
+DEV_TOKEN = "dev-local-token-not-a-secret-0123456789"  # nosec B105
 N_CANDLES = 400
 WINDOW = 150
 
@@ -47,7 +68,9 @@ def _candle(i: int, close: float, hi: float, lo: float, vol: float) -> MarketSna
 
 
 def build_market(seed: int = 7) -> tuple[MarketSnapshot, ...]:
-    rng = random.Random(seed)
+    # nosec B311 - deterministic REPRODUCIBILITY is the point here; this seeds a
+    # synthetic demo market, never a security or trading decision.
+    rng = random.Random(seed)  # nosec B311
     px = 60_000.0
     out = []
     for i in range(N_CANDLES):
@@ -57,8 +80,56 @@ def build_market(seed: int = 7) -> tuple[MarketSnapshot, ...]:
     return tuple(out)
 
 
-def build_view(now: dt.datetime) -> InMemoryPortfolioView:
-    market = build_market()
+def build_live_market(interval: str = "5m", limit: int = 1000):
+    """Real BTCUSDT candles from Binance's public endpoint (no credentials).
+
+    Returns (closed_snapshots, filters, source_note). Raises on failure so the
+    caller can decide whether to fall back — we never silently pretend live data
+    was obtained.
+    """
+
+    from ..infrastructure.market_data.binance_public import (
+        closed_only,
+        fetch_exchange_filters,
+        fetch_klines,
+    )
+
+    filters = fetch_exchange_filters()
+    snapshots = fetch_klines(interval=interval, limit=limit)
+    closed = closed_only(snapshots)
+    if not closed:
+        raise MarketDataUnavailable("no closed candles returned")
+    dropped = len(snapshots) - len(closed)
+    note = (f"binance public {interval}, {len(closed)} closed candles "
+            f"({dropped} in-progress excluded)")
+    return closed, filters, note
+
+
+class MarketDataUnavailable(RuntimeError):
+    pass
+
+
+def build_view(now: dt.datetime, live: bool = False,
+               interval: str = "5m") -> InMemoryPortfolioView:
+    filters = None
+    market_note = "synthetic seeded walk (no network)"
+    market_status = "synthetic"
+
+    if live:
+        try:
+            market, filters, market_note = build_live_market(interval=interval)
+            market_status = "ok"
+            print(f"[devserver] LIVE market data: {market_note}")
+            print(f"[devserver] real exchange filters: tick={filters.tick_size} "
+                  f"step={filters.step_size} minNotional={filters.min_notional}")
+        except Exception as exc:
+            # Be loud and honest rather than silently serving fake prices.
+            print(f"[devserver] LIVE market data FAILED ({type(exc).__name__}: "
+                  f"{exc}) -> refusing to fall back silently")
+            raise
+    else:
+        market = build_market()
+
     names = [c().metadata().name for c in BUILTIN_STRATEGIES]
     # Assignments are backdated so the display-name day counter is non-zero.
     portfolio = seed_portfolio(names, now=now - dt.timedelta(days=3),
@@ -69,10 +140,14 @@ def build_view(now: dt.datetime) -> InMemoryPortfolioView:
         strategy = by_name[slot.strategy_name]()
         runners.append((slot, strategy, strategy.initialize()))
 
-    execution = ExecutionService()
+    # Live mode uses the REAL exchange filters (Binance's actual LOT_SIZE step is
+    # 0.00001, not the 1-satoshi default), so fills obey the true venue rules.
+    execution = (ExecutionService(model=ExecutionModel(filters=filters))
+                 if filters else ExecutionService())
     fills = 0
     seq = 0
-    for tick in range(1, N_CANDLES + 1):
+    n = len(market)
+    for tick in range(1, n + 1):
         snapshot = market[tick - 1]
         window = market[max(0, tick - WINDOW):tick]
         batch = []
@@ -98,7 +173,7 @@ def build_view(now: dt.datetime) -> InMemoryPortfolioView:
             fills += result.accepted
 
     mark = market[-1].mark_price
-    print(f"[devserver] replayed {N_CANDLES} candles across "
+    print(f"[devserver] replayed {n} candles across "
           f"{len(portfolio.active) + len(portfolio.shadow)} wallets -> {fills} fills")
     print(f"[devserver] mark price {mark}  active equity "
           f"{portfolio.active_equity(mark)}  shadow {portfolio.shadow_equity(mark)}")
@@ -111,12 +186,57 @@ def build_view(now: dt.datetime) -> InMemoryPortfolioView:
         llm_healthy=llm_healthy,
         llm_model_id=llm_model,
         source_status=[
-            {"source_id": "binance_public", "status": "not_contacted",
-             "note": "dev harness uses a synthetic market; no network calls"},
+            {"source_id": "binance_public", "status": market_status,
+             "note": market_note},
             {"source_id": "llama_cpp", "status": "ok" if llm_healthy else "degraded",
              "note": f"local model: {llm_model}"},
         ],
     )
+
+
+def start_market_refresher(view: InMemoryPortfolioView, interval: str = "5m",
+                           period_seconds: float = 15.0) -> threading.Thread:
+    """Keep the mark price current from live Binance data.
+
+    Without this the mark is frozen at whatever the startup backfill saw, so the
+    dashboard would show live-sourced but stale prices. Re-marks every wallet's
+    equity against the newest CLOSED candle (the in-progress bar is still never
+    used for marking, matching the evaluation rules).
+
+    Failures leave the last good mark in place and flag the source as degraded —
+    we never invent a price.
+    """
+
+    from ..infrastructure.market_data.binance_public import closed_only, fetch_klines
+
+    def _loop() -> None:
+        while True:
+            try:
+                closed = closed_only(fetch_klines(interval=interval, limit=2))
+                if closed:
+                    newest = closed[-1]
+                    view.mark_price = newest.close
+                    view.now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+                    _set_source(view, "binance_public", "ok",
+                                f"live {interval}; marked at closed candle "
+                                f"{newest.close_time_ms}")
+            except Exception as exc:  # keep serving the last good mark
+                _set_source(view, "binance_public", "degraded",
+                            f"refresh failed: {type(exc).__name__}")
+            time.sleep(period_seconds)
+
+    thread = threading.Thread(target=_loop, name="market-refresher", daemon=True)
+    thread.start()
+    return thread
+
+
+def _set_source(view: InMemoryPortfolioView, source_id: str, status: str,
+                note: str) -> None:
+    for entry in view.source_status:
+        if entry.get("source_id") == source_id:
+            entry["status"] = status
+            entry["note"] = note
+            return
 
 
 def probe_local_llm() -> tuple[bool, str]:
@@ -166,12 +286,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tradebot-devserver")
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--live", action="store_true",
+                        help="fetch real BTCUSDT candles from Binance public "
+                             "(no credentials required)")
+    parser.add_argument("--interval", default="5m")
     args = parser.parse_args(argv)
 
     import uvicorn
 
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
-    view = build_view(now)
+    view = build_view(now, live=args.live, interval=args.interval)
+    if args.live:
+        start_market_refresher(view, interval=args.interval)
+        print(f"[devserver] market refresher running (every 15s, {args.interval} "
+              f"closed candles)")
+
     settings = ApiSettings(host=args.host, port=args.port, auth_token=DEV_TOKEN)
     app = create_app(view, settings)
 

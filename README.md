@@ -106,20 +106,38 @@ latter records every defect independent verifiers found, including two severe on
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements-dev.txt
 
-# Dashboard + API with a seeded 25-wallet portfolio (synthetic market, no network)
+# LIVE: real BTCUSDT candles from Binance public. No API key required.
+.venv/Scripts/python -m tradebot.api.devserver --port 5555 --live
+
+# Offline: seeded synthetic market, touches no network.
 .venv/Scripts/python -m tradebot.api.devserver --port 5555
 # -> http://127.0.0.1:5555/
 ```
 
 ## Going live
 
-### Market data — **no API key needed**
+### Market data — **live, and no API key needed**
 
-Public BTCUSDT data requires no credentials. This is deliberate: requiring
-exchange keys for paper trading was audit finding **A10**. The DataBroker
-allowlist already permits `data-api.binance.vision` (GET only,
-`/api/v3/klines`, `/api/v3/exchangeInfo`, …). To go live, point the market
-adapter at it and replace the devserver's synthetic feed.
+`--live` is wired and working. Public BTCUSDT data requires no credentials —
+deliberately: requiring exchange keys for paper trading was audit finding
+**A10**. Every request goes through the DataBroker allowlist
+(`data-api.binance.vision`, GET only).
+
+What live mode actually does:
+
+- backfills 1000 real 5m candles and replays them through the real execution
+  engine;
+- fetches the **real** exchange filters — Binance's actual `LOT_SIZE` step is
+  `0.00001`, not the 1-satoshi default, so fills obey true venue rules;
+- **excludes the in-progress candle** — only completed bars ever drive a
+  decision or a mark;
+- re-marks equity every 15s from the newest closed candle;
+- **fails loudly** if live data can't be fetched, rather than silently serving
+  synthetic prices; a refresh failure keeps the last good mark and flags the
+  source `degraded`.
+
+Prices are never parsed through a binary float — decimal strings go straight to
+`Decimal`.
 
 **If you later add private endpoints** (not required, and not recommended for a
 paper platform), credentials go in `.env` — never in the dashboard, never in git:
@@ -173,6 +191,7 @@ The new `tradebot` package is a release candidate, not a finished replacement:
 - Coverage is **97%, not 100%**.
 - Frontend has static safety analysis; no jsdom/Playwright suite yet.
 - The legacy flat modules still exist and still carry their original findings.
-- The devserver's market is **synthetic**, not live Binance.
+- Live mode backfills and re-marks, but does not yet re-run strategy
+  decisions as new bars close (that is the scheduler's job).
 
 Full detail in [`docs/release-checklist.md`](docs/release-checklist.md).
