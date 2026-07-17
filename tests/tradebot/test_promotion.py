@@ -145,3 +145,105 @@ def test_bottom_six_promotion_when_no_losers():
     assert len(result.activated) == 6
     assert len(p.active) == 12
     assert not result.banned_hashes  # retirement is not a ban
+
+
+# ---- Phase-13 verifier regressions -----------------------------------------
+
+def _candidate(vid, code_hash, fingerprint, category="novel", valid=True):
+    return Candidate(
+        strategy_name="Cand", strategy_version_id=vid, code_hash=code_hash,
+        structural_fingerprint=fingerprint, category=category,
+        technically_valid=valid,
+    )
+
+
+def test_eliminated_fingerprint_is_banned_not_just_the_hash():
+    """D1: `bans.ban(elim.code_hash)` never populated _fingerprints, so the
+    fingerprint arm of is_banned was dead code. An eliminated loser could
+    return under a new hash with a comment changed."""
+
+    portfolio = fresh_portfolio()
+    profits = [Decimal("-100")] + [Decimal("100")] * 11
+    plan = plan_replacements(evals_for(portfolio, profits))
+    loser = plan.eliminations[0]
+    assert loser.structural_fingerprint, "fingerprint must reach the decision"
+
+    bans = BanRegistry()
+    # Offer a structurally IDENTICAL clone under a brand-new hash.
+    clone = _candidate("v-clone", "brand-new-hash", loser.structural_fingerprint)
+    fallback = _candidate("v-ok", "ok-hash", "fp-unique")
+    provider = ListCandidateProvider(novel=[clone, fallback],
+                                     mutation=[_candidate("v-mut", "mut-hash",
+                                                          "fp-mut", "mutation")])
+    result = promote(portfolio, plan, provider, bans, now=NOW,
+                     id_factory=lambda h: f"new-{h}")
+
+    assert "v-clone" in result.quarantined, "reskinned clone must be rejected"
+    assert "v-clone" not in [v for _, v in result.activated]
+    assert bans.is_banned("anything", loser.structural_fingerprint) is True
+
+
+def test_failed_invariant_leaves_portfolio_untouched():
+    """D2: the roster was swapped BEFORE invariants were asserted, so a
+    failure left e.g. 11 active with no rollback, contradicting the
+    all-or-nothing contract."""
+
+    portfolio = fresh_portfolio()
+    profits = [Decimal("-100"), Decimal("-100")] + [Decimal("100")] * 10
+    plan = plan_replacements(evals_for(portfolio, profits))
+    # Force a desync: 2 eliminations but only 1 replacement will be built.
+    broken = type(plan)(
+        eliminations=plan.eliminations, replacement_count=1,
+        novel_count=1, mutation_count=0,
+        parent_version_ids=plan.parent_version_ids, ranking=plan.ranking,
+    )
+    before_ids = [s.wallet.wallet_id for s in portfolio.active]
+    bans = BanRegistry()
+    provider = ListCandidateProvider(
+        novel=[_candidate("v-new", "h-new", "fp-new")], mutation=[])
+
+    with pytest.raises(PromotionError, match="active count != 12"):
+        promote(portfolio, broken, provider, bans, now=NOW,
+                id_factory=lambda h: f"new-{h}")
+
+    after_ids = [s.wallet.wallet_id for s in portfolio.active]
+    assert after_ids == before_ids, "portfolio must be untouched on failure"
+    assert len(portfolio.active) == 12
+
+
+def test_aborted_batch_leaves_no_bans_behind():
+    """D4: bans were applied before candidate acquisition could abort, so an
+    aborted batch still mutated the registry."""
+
+    portfolio = fresh_portfolio()
+    profits = [Decimal("-100")] + [Decimal("100")] * 11
+    plan = plan_replacements(evals_for(portfolio, profits))
+    loser = plan.eliminations[0]
+    bans = BanRegistry()
+    # No candidates at all -> the batch must abort.
+    provider = ListCandidateProvider(novel=[], mutation=[])
+
+    with pytest.raises(PromotionError, match="no technically valid"):
+        promote(portfolio, plan, provider, bans, now=NOW,
+                id_factory=lambda h: f"new-{h}")
+
+    assert bans.is_banned(loser.code_hash) is False, "aborted batch left bans"
+    assert len(portfolio.active) == 12
+
+
+def test_successful_promotion_does_apply_bans():
+    """The staging must not lose the bans on the success path."""
+
+    portfolio = fresh_portfolio()
+    profits = [Decimal("-100")] + [Decimal("100")] * 11
+    plan = plan_replacements(evals_for(portfolio, profits))
+    loser = plan.eliminations[0]
+    bans = BanRegistry()
+    provider = ListCandidateProvider(
+        novel=[_candidate("v-new", "h-new", "fp-new")], mutation=[])
+
+    promote(portfolio, plan, provider, bans, now=NOW,
+            id_factory=lambda h: f"new-{h}")
+    assert bans.is_banned(loser.code_hash) is True
+    assert bans.is_banned("x", loser.structural_fingerprint) is True
+    assert len(portfolio.active) == 12

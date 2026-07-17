@@ -95,10 +95,13 @@ def _check_layout(bundle_dir: Path, report: ValidationReport) -> list[Path]:
     files: list[Path] = []
     total = 0
     for path in sorted(root.rglob("*")):
-        if path.is_dir():
-            continue
+        # Symlink check MUST precede the directory check: `is_dir()` follows the
+        # link, so a symlinked *directory* would otherwise be silently skipped
+        # here rather than rejected.
         if path.is_symlink():
             report.fail(f"symlink not allowed: {path.name}")
+            continue
+        if path.is_dir():
             continue
         resolved = path.resolve()
         if not resolved.is_relative_to(root):

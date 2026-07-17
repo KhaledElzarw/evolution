@@ -165,6 +165,82 @@ policy. **Fix:** pragma removed; covered by
 
 ---
 
+### V8 (SEVERE) — Fingerprint bans were dead code
+
+**Found by:** evolution-rules verifier (re-run after the session limit reset).
+
+`promotion.py` called `bans.ban(elim.code_hash)` — **hash only**. That was the
+only `.ban(` call site in the codebase, so `BanRegistry._fingerprints` was never
+populated and the fingerprint arm of `is_banned` could never fire. The
+fingerprint check in the candidate screen was therefore **inert**.
+
+Root cause: `EliminationDecision` had no `structural_fingerprint` field, even
+though `WalletEvaluation` carries one — `plan_replacements` simply dropped it.
+
+**Impact:** an eliminated loser could be re-promoted the following week by
+re-emitting structurally identical code under any new hash — a comment change
+suffices. This is precisely the "hash but not fingerprint" failure mode, and it
+defeats product rules 10/20.
+
+**Why the author's own tests missed it:**
+`test_novel_candidate_rejected_by_banned_fingerprint_alone` passed because it
+called `bans.ban(hash, fingerprint)` **directly**. It proved the component
+worked while nothing wired the fingerprint through — a component test standing
+in for an integration test.
+
+**Fix:** `structural_fingerprint` added to `EliminationDecision` and populated at
+all three construction sites; `promotion.py` now bans hash **and** fingerprint.
+Regression: `test_promotion.py::test_eliminated_fingerprint_is_banned_not_just_the_hash`
+offers a structurally identical clone under a brand-new hash and asserts it is
+quarantined.
+
+### V9 (SEVERE) — Failed post-commit invariant left the portfolio mutated
+
+`promotion.py` assigned `portfolio.active = survivors + new_slots` **before**
+running the post-commit invariants, and the raise was not caught. Any invariant
+trip left the portfolio partially mutated — verified: 12 active before, **11
+after**, with no way for the caller to recover. The docstring's "mutated only on
+success" was false.
+
+**Fix:** the proposed roster is now validated by a pure `_assert_roster_invariants`
+**before** the portfolio is touched; nothing after the commit point can raise.
+Regression: `::test_failed_invariant_leaves_portfolio_untouched`.
+
+### V10 (MODERATE) — `replacement_count` hardcoded to 6 in the retirement branch
+
+`bottom_six = ranked[-6:]` is size-adaptive but `replacement_count = 6` was a
+literal. With a short roster (4 active, none losing) the plan produced 4
+eliminations but `replacement_count=6`, desyncing `len(eliminations)` from
+`replacement_count` and breaking `promote()`'s roster arithmetic. Reachable via a
+prior V9 partial commit — the two defects compose.
+
+**Fix:** `replacement_count = len(bottom_six)`.
+
+### V11 (MINOR) — Bans applied before the batch could abort
+
+`BanRegistry` was mutated before candidate acquisition, which can raise. An
+aborted batch left the roster correctly untouched but the bans persisted,
+contradicting the all-or-nothing framing.
+
+**Fix:** bans are staged in a scratch registry (still screening candidates within
+the batch, so a loser cannot be re-promoted by the same transaction that
+eliminates it) and applied only at the commit point. Regressions:
+`::test_aborted_batch_leaves_no_bans_behind` and
+`::test_successful_promotion_does_apply_bans`.
+
+### V12 (MODERATE) — Symlinked directories silently skipped by the validator
+
+Found while covering the validator's untested lines. `_check_layout` tested
+`path.is_dir()` **before** `path.is_symlink()`; `is_dir()` follows the link, so a
+symlinked *directory* hit `continue` and was never rejected — despite the docs
+claiming symlinks are rejected. The symlink and path-escape controls had **no
+tests at all**.
+
+**Fix:** the symlink check now precedes the directory check. Regressions:
+`test_plugin_validator.py::test_symlink_in_bundle_rejected`,
+`::test_symlinked_directory_rejected`,
+`::test_subdirectories_are_walked_not_skipped`, plus manifest-corruption cases.
+
 ## Verifier findings assessed and NOT actioned
 
 - **`origin_allowed(None) == True`** (absent Origin). Not a CSRF hole: the same
@@ -195,13 +271,29 @@ session limit before producing findings.
   reproduced or resolved** and remains an open lead worth chasing: money columns
   should be text/`Numeric`, never `REAL`.
 
-**Update:** the database verifier's partial signal *was* chased to ground and
-resolved — see **V7** above. The remaining unverified area is therefore:
+**Update:** both previously-unverified areas have now been covered.
 
-- **Evolution / replacement / promotion rule fidelity** — covered only by the
-  author's own tests. The elimination-count, ceil/floor allocation, parent
-  eligibility, ban-reuse and crash-injection rules remain **unverified by an
-  independent reviewer**.
+- The **database** verifier's partial signal was chased to ground — see **V7**.
+- The **evolution-rules** verifier was re-run after the session limit reset and
+  found **four defects (V8-V11)**, two of them severe.
 
-That gap, plus the known Phase 3 legacy-import gap and the 97%-not-100%
-coverage position, are the honest outstanding risks on this branch.
+### Rules the evolution verifier confirmed as HOLDING
+
+Every loser eliminated (`replacement_count == n` for n = 1..12);
+`novel=ceil(n/2)` / `mutation=floor(n/2)` summing to `replacement_count` for
+every n including all odd n; bottom-six retirement is not a ban; zero-fill uses
+`fill_count` and never `completed_round_trip_count`; an eliminated strategy is
+never a mutation parent (verified with a profitable-but-zero-fill top
+performer); zero surviving parents converts mutation slots to novel with the sum
+preserved; ranking keys only on `(-profit, wallet_id)` with deterministic ties;
+roll-forward never resurrects an eliminated strategy; poor-but-valid candidates
+promote while invalid ones are quarantined.
+
+### Remaining honest risks
+
+- **Phase 3 legacy import is not implemented.**
+- **Coverage is 97%, not the specified 100%** (96 statements; see
+  `docs/testing.md`).
+- **Frontend has static safety analysis only** — no jsdom/Playwright.
+- The legacy stack still carries its original audit findings; the new package
+  supersedes rather than replaces it.

@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from tradebot.infrastructure.adapters.plugins.validator import (
     compute_code_hash,
     validate_bundle,
@@ -196,3 +198,82 @@ def test_code_hash_changes_with_content(tmp_path):
     b1 = make_bundle(tmp_path / "a")
     b2 = make_bundle(tmp_path / "b", strategy_src=VALID_STRATEGY + "\n# v2\n")
     assert compute_code_hash(b1) != compute_code_hash(b2)
+
+
+# ---- bundle-layout security controls (previously claimed but untested) ------
+
+def test_symlink_in_bundle_rejected(tmp_path):
+    """A symlink could point at anything outside the bundle. The docs claim
+    these are rejected; this proves it."""
+    bundle = make_bundle(tmp_path)
+    outside = tmp_path / "outside_secret.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = bundle / "link.py"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation not permitted on this platform/account")
+    report = validate_bundle(bundle)
+    assert not report.ok
+    assert any("symlink not allowed" in e for e in report.errors)
+
+
+def test_symlinked_directory_rejected(tmp_path):
+    bundle = make_bundle(tmp_path)
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (target / "payload.py").write_text("x = 1\n", encoding="utf-8")
+    try:
+        (bundle / "sub").symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation not permitted on this platform/account")
+    report = validate_bundle(bundle)
+    assert not report.ok
+
+
+def test_subdirectories_are_walked_not_skipped(tmp_path):
+    """Forbidden code hidden in a nested package must still be caught."""
+    bundle = make_bundle(tmp_path)
+    pkg = bundle / "helpers"
+    pkg.mkdir()
+    (pkg / "sneaky.py").write_text("import os\n", encoding="utf-8")
+    report = validate_bundle(bundle)
+    assert not report.ok
+    assert any("forbidden import 'os'" in e for e in report.errors)
+
+
+def test_malformed_manifest_json_rejected(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir(parents=True)
+    (bundle / "manifest.json").write_text("{not json at all", encoding="utf-8")
+    (bundle / "strategy.py").write_text(VALID_STRATEGY, encoding="utf-8")
+    report = validate_bundle(bundle)
+    assert not report.ok
+    assert any("manifest unreadable" in e for e in report.errors)
+
+
+def test_manifest_must_be_a_json_object(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir(parents=True)
+    (bundle / "manifest.json").write_text('["a", "list"]', encoding="utf-8")
+    (bundle / "strategy.py").write_text(VALID_STRATEGY, encoding="utf-8")
+    report = validate_bundle(bundle)
+    assert not report.ok
+    assert any("must be a JSON object" in e for e in report.errors)
+
+
+def test_unsupported_manifest_schema_version_rejected(tmp_path):
+    bad = dict(VALID_MANIFEST)
+    bad["schema_version"] = "manifest-v99"
+    report = validate_bundle(make_bundle(tmp_path, manifest=bad))
+    assert not report.ok
+    assert any("unsupported manifest schema_version" in e for e in report.errors)
+
+
+def test_non_utf8_manifest_rejected(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir(parents=True)
+    (bundle / "manifest.json").write_bytes(b"\xff\xfe\x00invalid")
+    (bundle / "strategy.py").write_text(VALID_STRATEGY, encoding="utf-8")
+    report = validate_bundle(bundle)
+    assert not report.ok

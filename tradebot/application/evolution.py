@@ -34,8 +34,11 @@ class EliminationDecision:
     wallet_id: str
     strategy_version_id: str
     code_hash: str
+    # Carried so the ban covers the STRUCTURE, not just the bytes. Without it a
+    # loser returns next week under a new hash with a comment changed.
+    structural_fingerprint: str
     reason: str
-    banned: bool  # loss and no-trade eliminations ban the code hash
+    banned: bool  # loss and no-trade eliminations ban hash AND fingerprint
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +86,7 @@ def plan_replacements(evaluations: list[WalletEvaluation]) -> ReplacementPlan:
                 wallet_id=ev.wallet_id,
                 strategy_version_id=ev.strategy_version_id,
                 code_hash=ev.code_hash,
+                structural_fingerprint=ev.structural_fingerprint,
                 reason="+".join(reasons),
                 banned=True,
             ))
@@ -100,11 +104,16 @@ def plan_replacements(evaluations: list[WalletEvaluation]) -> ReplacementPlan:
                 wallet_id=ev.wallet_id,
                 strategy_version_id=ev.strategy_version_id,
                 code_hash=ev.code_hash,
+                structural_fingerprint=ev.structural_fingerprint,
                 reason=RETIRE_BOTTOM_SIX,
                 banned=False,  # retirement is not a ban
             ))
             eliminated_ids.add(ev.wallet_id)
-        replacement_count = 6
+        # Derive from what was ACTUALLY retired. `ranked[-6:]` is size-adaptive,
+        # so hardcoding 6 would desync len(eliminations) from replacement_count
+        # whenever the roster is short of 12 and break the roster arithmetic in
+        # promote().
+        replacement_count = len(bottom_six)
 
     novel_count = math.ceil(replacement_count / 2)
     mutation_count = math.floor(replacement_count / 2)
@@ -139,6 +148,7 @@ def eliminate_zero_fill_shadows(
                 wallet_id=ev.wallet_id,
                 strategy_version_id=ev.strategy_version_id,
                 code_hash=ev.code_hash,
+                structural_fingerprint=ev.structural_fingerprint,
                 reason=NO_TRADE_ELIMINATION,
                 banned=True,
             ))

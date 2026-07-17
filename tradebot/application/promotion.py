@@ -85,15 +85,26 @@ def promote(
     quarantined: list[str] = []
     banned: list[str] = []
 
-    # Ban losing / no-trade hashes first (idempotent).
-    for elim in plan.eliminations:
-        if elim.banned:
-            bans.ban(elim.code_hash)
-            banned.append(elim.code_hash)
+    # Bans are NOT applied yet: candidate acquisition below can still abort the
+    # batch, and an aborted batch must leave no trace (D4). The set is staged
+    # here and applied at the commit point.
+    to_ban = [e for e in plan.eliminations if e.banned]
+    staged_bans = BanRegistry()
+    for elim in to_ban:
+        staged_bans.ban(elim.code_hash, elim.structural_fingerprint)
+        banned.append(elim.code_hash)
+
+    def _is_banned(code_hash: str, fingerprint: str | None = None) -> bool:
+        # Candidates are screened against both the committed bans and the ones
+        # staged for this batch, so a loser cannot be re-promoted in the same
+        # transaction that eliminates it.
+        return (bans.is_banned(code_hash, fingerprint)
+                or staged_bans.is_banned(code_hash, fingerprint))
 
     categories = ["novel"] * plan.novel_count + ["mutation"] * plan.mutation_count
     for category in categories:
-        candidate = _acquire_valid_candidate(provider, bans, category, quarantined)
+        candidate = _acquire_valid_candidate(provider, _is_banned, category,
+                                             quarantined)
         if candidate is None:
             raise PromotionError(f"no technically valid {category} candidate available")
         wallet_id = id_factory(f"active-{candidate.strategy_version_id}")
@@ -107,14 +118,22 @@ def promote(
         new_slots.append(slot)
         activated.append((wallet_id, candidate.strategy_version_id))
 
-    # --- commit point: swap the roster and archive retirees ---
+    # Validate the PROPOSED roster BEFORE touching the portfolio. Asserting
+    # after the swap (as this previously did) left the portfolio mutated on
+    # failure -- e.g. 11 active with no way back -- contradicting the
+    # all-or-nothing contract. Nothing below this line may raise.
+    proposed = survivors + new_slots
+    _assert_roster_invariants(proposed, portfolio.dark_horse)
+
+    # --- commit point: no failure paths past here ---
+    for elim in to_ban:
+        bans.ban(elim.code_hash, elim.structural_fingerprint)
+    portfolio.active = proposed
     for elim in plan.eliminations:
         slot = by_id[elim.wallet_id]
         if archive_sink is not None:
             archive_sink(slot, elim.reason)
-    portfolio.active = survivors + new_slots
 
-    _assert_post_commit_invariants(portfolio, bans)
     return PromotionResult(
         archived_wallet_ids=tuple(sorted(eliminated_ids)),
         activated=tuple(activated),
@@ -124,8 +143,8 @@ def promote(
 
 
 def _acquire_valid_candidate(
-    provider: CandidateProvider, bans: BanRegistry, category: str,
-    quarantined: list[str],
+    provider: CandidateProvider, is_banned: Callable[[str, str | None], bool],
+    category: str, quarantined: list[str],
 ) -> Candidate | None:
     """Pull candidates until a technically valid, non-banned one is found."""
 
@@ -133,7 +152,7 @@ def _acquire_valid_candidate(
         candidate = provider.next_candidate(category)
         if candidate is None:
             return None
-        if bans.is_banned(candidate.code_hash, candidate.structural_fingerprint):
+        if is_banned(candidate.code_hash, candidate.structural_fingerprint):
             quarantined.append(candidate.strategy_version_id)
             continue
         if not candidate.technically_valid:
@@ -142,15 +161,18 @@ def _acquire_valid_candidate(
         return candidate
 
 
-def _assert_post_commit_invariants(portfolio: Portfolio, bans: BanRegistry) -> None:
-    if len(portfolio.active) != 12:
-        raise PromotionError(f"post-commit active count != 12: {len(portfolio.active)}")
-    if portfolio.dark_horse is None:
+def _assert_roster_invariants(active: list[WalletSlot],
+                              dark_horse: WalletSlot | None) -> None:
+    """Check a PROPOSED roster. Pure: raises without mutating anything."""
+
+    if len(active) != 12:
+        raise PromotionError(f"post-commit active count != 12: {len(active)}")
+    if dark_horse is None:
         raise PromotionError("dark horse missing after promotion")
-    ids = [s.wallet.wallet_id for s in portfolio.active]
+    ids = [s.wallet.wallet_id for s in active]
     if len(set(ids)) != 12:
         raise PromotionError("duplicate active wallet ids after promotion")
-    for slot in portfolio.active:
+    for slot in active:
         # Replacement wallets must start clean; survivors keep their balances.
         if slot.wallet.base_qty < 0 or slot.wallet.quote_cash < 0:
             raise PromotionError("negative balance after promotion")
