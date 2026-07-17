@@ -55,7 +55,7 @@ when its acceptance gate passes with recorded command output.
 | 6 | Initial 12 strategies & shadow pool | **Done** | `tradebot/strategies/` (12 modules + indicators + base); `application/portfolio.py`; 90 tests incl. 25-wallet deterministic replay, bit-reproducibility, active/shadow fairness, naming rule, 130k/120k split |
 | 7 | DataBroker & local llama.cpp client | Not started | — |
 | 8 | Daily & weekly learning | Not started | — |
-| 9 | Evolution, novelty & promotion | Not started | — |
+| 9 | Evolution, novelty & promotion | **Rules + atomic promotion done; novelty/lineage pending** | `domain/evaluations.py`, `application/{evolution,liquidation,promotion}.py`; `docs/evolution-policy.md`; 34 tests (all replacement scenarios, ban reuse, roll-forward, shortage rollback, invariants) |
 | 10 | Dark Horse | Not started | — |
 | 11 | API & dashboard rewrite | Not started | — |
 | 12 | Operations, observability & CI | Not started | — |
