@@ -262,3 +262,49 @@ def test_portfolio_without_dark_horse_reports_none():
     body = TestClient(create_app(view, ApiSettings(auth_token=TOKEN))).get(
         "/api/v2/portfolio/summary").json()
     assert body["dark_horse"] is None
+
+
+# ---- Phase-13 verifier regressions -----------------------------------------
+
+def test_oversized_body_rejected_without_content_length():
+    """A chunked/streamed request omits Content-Length; the cap must still
+    apply (the guard used to only run `if content-length` -> bypassable)."""
+
+    settings = ApiSettings(host="127.0.0.1", auth_token=TOKEN, max_body_bytes=64)
+    c = TestClient(create_app(make_view(), settings))
+
+    def chunked():
+        yield b"x" * 5000
+
+    r = c.post("/api/v2/reports/daily/refresh", content=chunked(),
+               headers={"Authorization": f"Bearer {TOKEN}",
+                        "Content-Type": "application/json"})
+    assert r.status_code == 413
+    assert "Content-Length" not in r.request.headers
+
+
+def test_413_response_carries_security_headers():
+    """Early returns used to skip the header middleware entirely."""
+
+    r = client(max_body_bytes=10).post(
+        "/api/v2/reports/daily/refresh", json={"date": "x" * 500},
+        headers={"Authorization": f"Bearer {TOKEN}"})
+    assert r.status_code == 413
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_malformed_content_length_rejected():
+    c = client(max_body_bytes=64)
+    r = c.post("/api/v2/reports/daily/refresh",
+               content=b'{"date": "2026-07-16"}',
+               headers={"Authorization": f"Bearer {TOKEN}",
+                        "Content-Type": "application/json",
+                        "Content-Length": "not-a-number"})
+    assert r.status_code in (400, 413)
+
+
+def test_normal_sized_body_still_passes():
+    r = client().post("/api/v2/reports/daily/refresh", json={"date": "2026-07-16"},
+                      headers={"Authorization": f"Bearer {TOKEN}"})
+    assert r.status_code == 200

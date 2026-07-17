@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -44,14 +45,19 @@ ALLOWED_IMPORTS: frozenset[str] = frozenset(
 )
 
 FORBIDDEN_CALL_NAMES: frozenset[str] = frozenset(
-    {"eval", "exec", "compile", "__import__", "open", "globals", "vars", "input",
-     "breakpoint", "exit", "quit", "memoryview"}
+    {"eval", "exec", "compile", "__import__", "open", "globals", "locals",
+     "vars", "dir", "input", "breakpoint", "exit", "quit", "memoryview",
+     # Reflection primitives: string-based attribute access is a sandbox-escape
+     # vector (getattr(x, "__cl"+"ass__") defeats a static attribute blocklist),
+     # so these are denied outright. Strategy code has no legitimate use for them.
+     "getattr", "setattr", "delattr", "hasattr"}
 )
 
-FORBIDDEN_ATTRIBUTES: frozenset[str] = frozenset(
-    {"__subclasses__", "__globals__", "__code__", "__builtins__", "__loader__",
-     "__import__", "__reduce__", "__reduce_ex__", "__getattribute__"}
-)
+# Any dunder attribute access is rejected — not just a hand-picked list. The
+# classic escape chains through __class__ / __bases__ / __mro__ / __subclasses__
+# / __globals__, and enumerating a blocklist is fragile. Strategies never need a
+# dunder attribute, so deny the whole shape.
+_DUNDER_RE = re.compile(r"^__.*__$")
 
 MAX_FILES = 16
 MAX_TOTAL_BYTES = 256 * 1024
@@ -157,11 +163,18 @@ def _check_python(py_path: Path, report: ValidationReport) -> None:
             if isinstance(fn, ast.Name) and fn.id in FORBIDDEN_CALL_NAMES:
                 report.fail(f"{py_path.name}: forbidden call '{fn.id}'")
         elif isinstance(node, ast.Attribute):
-            if node.attr in FORBIDDEN_ATTRIBUTES:
-                report.fail(f"{py_path.name}: forbidden attribute '{node.attr}'")
+            if _DUNDER_RE.match(node.attr):
+                report.fail(f"{py_path.name}: forbidden dunder attribute "
+                            f"'{node.attr}'")
         elif isinstance(node, ast.Name) and node.id in FORBIDDEN_CALL_NAMES:
-            # Referencing eval/exec without calling (aliasing escape).
+            # Referencing eval/exec/getattr without calling (aliasing escape).
             report.fail(f"{py_path.name}: forbidden name '{node.id}'")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            # A dunder passed as a string (e.g. to a reflection helper) has no
+            # legitimate purpose and defeats attribute-name checks.
+            if _DUNDER_RE.match(node.value):
+                report.fail(f"{py_path.name}: forbidden dunder string "
+                            f"'{node.value}'")
 
 
 def compute_code_hash(bundle_dir: Path) -> str:

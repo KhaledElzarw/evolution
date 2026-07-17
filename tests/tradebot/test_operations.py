@@ -4,6 +4,7 @@ Closes A15: no process is ever signalled without full identity verification.
 No real processes are started or signalled anywhere in this suite.
 """
 
+import dataclasses
 import json
 import logging
 import signal
@@ -492,3 +493,71 @@ def test_all_required_commands_exist():
                  "seed", "run-daily-review", "run-weekly-review",
                  "validate-strategy", "replay-strategy"):
         assert name in COMMANDS
+
+
+# ---- Phase-13 verifier regressions -----------------------------------------
+
+def test_os_only_probe_can_verify_a_real_process():
+    """Regression: `default_probe` reports OS facts only (it cannot know
+    service/instance_id/nonce). Strict `matches` therefore ALWAYS failed
+    against it, so real `stop`/`status` could never confirm a live process.
+    `verify` must compare OS-observable fields only."""
+
+    recorded = identity(service="api", instance_id="inst-1", nonce="nonce-1")
+    # Exactly what default_probe returns: OS facts, blank file-only fields.
+    os_only = ProcessIdentity(
+        version=IDENTITY_VERSION, pid=recorded.pid, start_time=recorded.start_time,
+        executable=recorded.executable, command=recorded.command,
+        service="", instance_id="", nonce="",
+    )
+    assert recorded.matches(os_only) is False      # strict compare still differs
+    assert recorded.matches_live(os_only) is True  # OS-observable fields agree
+    assert verify(recorded, lambda pid: os_only) is os_only  # no longer raises
+
+
+def test_matches_live_still_defeats_pid_reuse():
+    """The anti-reuse guarantee must survive the matches_live change: every
+    OS-observable field difference must still break the match."""
+
+    recorded = identity(pid=4242, start=1_000_000.0)
+    for field, value in (("start_time", 1_700_000.0),
+                         ("executable", "/usr/bin/postgres"),
+                         ("command", "postgres -D /var/lib/pg"),
+                         ("pid", 9999)):
+        recycled = dataclasses.replace(recorded, **{field: value})
+        assert recorded.matches_live(recycled) is False, field
+
+
+def test_status_reports_running_with_os_only_probe(tmp_path):
+    """End-to-end: `status` must say "running", not "unknown", for a genuine
+    process observed through an OS-only probe."""
+
+    rec = identity(service="api")
+    write_pid_file(tmp_path / "api.pid.json", rec)
+    os_only = ProcessIdentity(
+        version=IDENTITY_VERSION, pid=rec.pid, start_time=rec.start_time,
+        executable=rec.executable, command=rec.command,
+        service="", instance_id="", nonce="",
+    )
+    lines, out = capture()
+    main(["status"], runtime(tmp_path, probe=lambda pid: os_only, out=out))
+    assert json.loads(lines[0])["services"]["api"]["state"] == "running"
+
+
+def test_money_rejects_float_at_the_boundary():
+    """Regression: this guard carried a `# pragma: no cover` despite being
+    trivially testable. Floats must never enter money math."""
+
+    from decimal import Decimal
+
+    import pytest as _pytest
+
+    from tradebot.domain.money import base, quote
+
+    for fn in (quote, base):
+        with _pytest.raises(TypeError, match="float is not allowed"):
+            fn(1.23)
+    # Non-float inputs still work.
+    assert quote("1.005") == Decimal("1.01")
+    assert base(Decimal("0.5")) == Decimal("0.50000000")
+    assert quote(5) == Decimal("5.00")

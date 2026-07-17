@@ -205,14 +205,23 @@ class Wallet:
             self.base_qty = base("0")
             self.avg_cost = quote("0")
 
-        # USDT legs net to zero: net_proceeds + fee - cost_released + (cost_released - gross)
-        # = (gross - fee) + fee - gross = 0. A02: disposal fee reduces proceeds once.
+        # Double-entry (USDT legs sum to zero). Sign convention: credit
+        # positive. The realized_pnl leg carries the TRUE net realized P&L
+        # (a gain is a credit to equity -> negative here); its magnitude equals
+        # the wallet's realized_pnl delta. The base_asset contra leg is the
+        # balancing plug (inventory basis released plus the disposal fee drawn
+        # against the conversion). This is NOT the old `cost_released - gross`
+        # plug, which mislabelled a sign-inverted gross figure as realized P&L.
+        base_contra = quote(-(cost_released + fee))
+        realized_leg = quote(-realized)
+        # Check: net_proceeds + fee - realized - (cost_released + fee)
+        #      = net_proceeds - realized - cost_released = 0.
         return (
             Posting("base_asset", "BTC", -qty),
             Posting("quote_cash", "USDT", net_proceeds),
             Posting("fee_expense", "USDT", fee),
-            Posting("base_asset", "USDT", -cost_released),
-            Posting("realized_pnl", "USDT", quote(cost_released - gross)),
+            Posting("base_asset", "USDT", base_contra),
+            Posting("realized_pnl", "USDT", realized_leg),
         )
 
     def _assert_invariants(self) -> None:

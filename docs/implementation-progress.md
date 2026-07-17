@@ -59,7 +59,7 @@ when its acceptance gate passes with recorded command output.
 | 10 | Dark Horse | **Done** | `domain/dark_horse.py`, `application/dark_horse.py`; `docs/dark-horse.md`; 21 tests (five-domain committee, explicit missing/stale degradation, no-shorting type, elimination exemption via Phase 9 engine, wallet continuity across upgrade/rollback) |
 | 11 | API & dashboard rewrite | **Core done** | `tradebot/api/{security,app,views}.py`, `dashboard/static/dashboard.v2.js`; 44 tests (fail-closed mutations, redacted errors, bind guard, CSP headers, 19 v2 routes, zero unsafe DOM sinks, URL vetting) |
 | 12 | Operations, observability & CI | **Done** | `operations/{process_identity,structured_logging}.py`, `cli/tradebotctl.py`, 8-gate `.github/workflows/ci.yml`, `pyproject.toml` (mypy/bandit/coverage), `docs/testing.md`; 48 tests |
-| 13 | Independent verification & cleanup | Not started | — |
+| 13 | Independent verification & cleanup | **Partial** | `docs/audits/phase13-verification.md`; 6 verifiers launched (2 completed, 4 hit session limit); 6 defects found and fixed incl. a CRITICAL sandbox escape; 2 areas remain unverified |
 
 ## Baseline metrics (Phase 0, actual)
 - Tests: 403 passed, 11 failed, 1 collection error (`fcntl`), on Windows/Python 3.11.9
@@ -200,3 +200,37 @@ when its acceptance gate passes with recorded command output.
   from the parent by design; behaviour covered by real-subprocess tests).
 - 48 new tests. New-package suite **402 passed**; full suite **805 passed / same
   11 pre-existing failures**.
+
+### Phase 13 — evidence (actual)
+Six fresh-context adversarial verifiers were run. **2 of 6 completed; 4 died on a
+session limit** (3 had already emitted partial signals, which were chased
+manually). Findings — all reproduced before fixing:
+
+1. **CRITICAL: plugin sandbox escape.** The AST validator's deny-by-default claim
+   was FALSE. `getattr` was not blocked and the dunder blocklist was partial, so
+   `getattr(getattr((), "__cl"+"ass__"), "__ba"+"ses__")[0]` passed validation.
+   Reproduced end-to-end: the bundle validated `ok=True` and the worker reached
+   **299 subclasses incl. `_wrap_close` and `catch_warnings`** (routes to
+   `os.system`) = RCE. Fixed by blocking reflection builtins and ALL dunder
+   attributes/strings. 8/8 vectors now rejected; 12 built-ins unaffected.
+2. **MODERATE: `realized_pnl` posting wrong value + inverted sign** (-594.00 vs
+   true +587.40), contradicting the module's own docstring. Latent but a real
+   audit-trail bug. Fixed; postings still balance.
+3. **LOW/MED: body-size cap bypassable** by omitting Content-Length (chunked).
+   Fixed by measuring the real body.
+4. **LOW: early 413 carried no security headers.** Fixed.
+5. **FUNCTIONAL: `default_probe` made real `stop`/`status` impossible** — strict
+   `matches()` could never succeed against an OS-only probe. Fixed by splitting
+   `matches_live()` (OS-observable fields, which are what defeat PID reuse) from
+   the strict full compare; anti-reuse guarantee preserved by test.
+6. **LOW: improper `# pragma: no cover`** on a testable float guard. Removed and
+   covered.
+
+Post-fix gates (actual): new-package **415 passed**; ruff clean; mypy clean (62
+files); bandit **0 issues**; coverage `tradebot/*` **97%**; full suite **818
+passed / same 11 pre-existing failures**.
+
+**NOT verified (honest gap):** the evolution-rules and database/migration
+verifiers died before reporting. Those areas rest on the author's own tests only.
+The DB verifier's unreproduced partial signal *"Confirmed money precision loss"*
+remains an open lead.

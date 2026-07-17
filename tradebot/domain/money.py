@@ -41,7 +41,7 @@ def _to_decimal(value: str | int | Decimal) -> Decimal:
     float must stringify it at the boundary and accept the rounding here.
     """
 
-    if isinstance(value, float):  # pragma: no cover - defensive guard
+    if isinstance(value, float):
         raise TypeError(
             "float is not allowed in money math; pass str/int/Decimal"
         )

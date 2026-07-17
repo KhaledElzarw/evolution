@@ -59,17 +59,31 @@ def create_app(view: PortfolioView, settings: ApiSettings | None = None) -> Fast
 
     @app.middleware("http")
     async def _security_middleware(request: Request, call_next: Callable):
-        if request.headers.get("content-length"):
+        # Content-Length is a hint, not a guarantee: a chunked/streamed request
+        # omits it entirely. Check the declared length first (cheap rejection),
+        # then enforce the real cap against the actual body so the limit cannot
+        # be bypassed by dropping the header.
+        declared = request.headers.get("content-length")
+        if declared is not None:
             try:
-                length = int(request.headers["content-length"])
+                if int(declared) > settings.max_body_bytes:
+                    return _too_large()
             except ValueError:
-                length = 0
-            if length > settings.max_body_bytes:
-                return JSONResponse({"error": "request too large"}, status_code=413)
+                return _too_large()
+        elif request.method in ("POST", "PUT", "PATCH"):
+            body = await request.body()
+            if len(body) > settings.max_body_bytes:
+                return _too_large()
+
         response = await call_next(request)
         for key, value in SECURITY_HEADERS.items():
             response.headers[key] = value
         return response
+
+    def _too_large() -> JSONResponse:
+        # Early returns must still carry the security headers.
+        return JSONResponse({"error": "request too large"}, status_code=413,
+                            headers=SECURITY_HEADERS)
 
     @app.exception_handler(Exception)
     async def _redact(request: Request, exc: Exception) -> JSONResponse:

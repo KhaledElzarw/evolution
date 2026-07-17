@@ -67,7 +67,7 @@ def cmd_status(rt: Runtime, _args) -> int:
         if live is None:
             services[service] = {"state": "stopped", "pid": recorded.pid,
                                  "reason": "process not running (stale pid file)"}
-        elif not recorded.matches(live):
+        elif not recorded.matches_live(live):
             # Never claim a mismatched process is ours.
             services[service] = {"state": "unknown", "pid": recorded.pid,
                                  "reason": "pid reused by another process"}
@@ -85,7 +85,7 @@ def cmd_start(rt: Runtime, args) -> int:
         recorded = read_pid_file(rt.pid_file(service))
         live = rt.probe(recorded.pid) if (recorded and rt.probe) else None
         if recorded is not None and live is not None:
-            if recorded.matches(live):
+            if recorded.matches_live(live):
                 started[service] = {"state": "already running",
                                     "pid": recorded.pid}
                 continue

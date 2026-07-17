@@ -82,6 +82,68 @@ def test_dynamic_execution_rejected(tmp_path):
         assert not report.ok, name
 
 
+def test_reflection_escape_vectors_rejected(tmp_path):
+    """Regression for the Phase-13 sandbox-escape finding: getattr + string
+    dunders reached object.__subclasses__() (299 classes incl. os gadgets)
+    despite passing the old validator. Every variant must now be rejected."""
+
+    vectors = {
+        "getattr_call": "x = getattr({}, 'update')\n",
+        "setattr_call": "setattr(object(), 'a', 1)\n",
+        "vars_call": "vars(object())\n",
+        "dir_call": "dir(object())\n",
+        "hasattr_call": "hasattr(object(), 'x')\n",
+        "class_dunder": "c = ().__class__\n",
+        "bases_dunder": "b = int.__bases__\n",
+        "mro_dunder": "from decimal import Decimal\nm = Decimal.__mro__\n",
+        "dict_dunder": "d = object().__dict__\n",
+        "globals_dunder": "def f():\n    return f.__globals__\n",
+        "dunder_string_literal": "s = '__class__'\n",
+        # The exact escape chain proven to reach subprocess/os gadgets.
+        "string_reflection_chain": (
+            "def p():\n"
+            "    base = getattr(getattr((), '__cl'), '__ba')\n"
+            "    return base\n"
+        ),
+        "getattr_alias": "g = getattr\n",
+    }
+    for name, src in vectors.items():
+        report = validate_bundle(make_bundle(tmp_path / name, strategy_src=src))
+        assert not report.ok, f"escape vector not blocked: {name}"
+
+
+def test_builtin_strategy_sources_have_no_reflection_constructs():
+    """The hardening must not target legitimate strategy logic: no built-in
+    uses getattr/setattr/vars/dir/hasattr or any dunder attribute/string.
+
+    (Built-in *modules* use package-relative imports and __future__, which a
+    distributable bundle would not, so this checks the reflection rules
+    directly rather than running full bundle validation on package source.)"""
+
+    import ast
+    import inspect
+
+    from tradebot.infrastructure.adapters.plugins.validator import (
+        FORBIDDEN_CALL_NAMES,
+        _DUNDER_RE,
+    )
+    from tradebot.strategies.builtin import BUILTIN_STRATEGIES
+
+    offenders = []
+    for cls in BUILTIN_STRATEGIES:
+        tree = ast.parse(inspect.getsource(inspect.getmodule(cls)))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and _DUNDER_RE.match(node.attr):
+                offenders.append((cls.__name__, node.attr))
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                  and node.func.id in FORBIDDEN_CALL_NAMES):
+                offenders.append((cls.__name__, node.func.id))
+            elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                  and _DUNDER_RE.match(node.value)):
+                offenders.append((cls.__name__, node.value))
+    assert offenders == [], f"built-ins use forbidden constructs: {offenders}"
+
+
 def test_relative_import_rejected(tmp_path):
     report = validate_bundle(
         make_bundle(tmp_path, strategy_src="from . import x\n"))

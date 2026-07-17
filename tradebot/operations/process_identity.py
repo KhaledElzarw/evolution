@@ -48,17 +48,39 @@ class ProcessIdentity:
     nonce: str
 
     def matches(self, other: ProcessIdentity, *, tolerance: float = 1.0) -> bool:
-        """Every field must agree. start_time compared with a small tolerance
-        because platforms report it at differing resolutions."""
+        """Strict comparison: EVERY field must agree.
+
+        Used when both sides carry the full record (e.g. comparing two PID-file
+        reads, or a fake probe in tests). For comparison against a live process
+        use :meth:`matches_live` — the OS cannot report service/instance/nonce.
+        """
 
         return (
-            self.pid == other.pid
-            and abs(self.start_time - other.start_time) <= tolerance
-            and self.executable == other.executable
-            and self.command == other.command
+            self.matches_live(other, tolerance=tolerance)
             and self.service == other.service
             and self.instance_id == other.instance_id
             and self.nonce == other.nonce
+        )
+
+    def matches_live(self, live: ProcessIdentity, *, tolerance: float = 1.0) -> bool:
+        """Compare only OS-observable fields against a live process.
+
+        These are the fields that actually defeat PID reuse: a recycled PID has
+        a different creation time and almost always a different executable and
+        command line. ``service``/``instance_id``/``nonce`` are NOT observable
+        from the OS — they authenticate the PID *file* against this deployment,
+        and comparing them to a probe result would always fail (or, if the probe
+        copied them from the file, be circular and prove nothing).
+
+        start_time uses a small tolerance because platforms report creation time
+        at differing resolutions.
+        """
+
+        return (
+            self.pid == live.pid
+            and abs(self.start_time - live.start_time) <= tolerance
+            and self.executable == live.executable
+            and self.command == live.command
         )
 
 
@@ -95,12 +117,15 @@ ProbeFn = Callable[[int], "ProcessIdentity | None"]
 
 
 def verify(recorded: ProcessIdentity, probe: ProbeFn) -> ProcessIdentity:
-    """Confirm the live process still IS the recorded one, or raise."""
+    """Confirm the live process still IS the recorded one, or raise.
+
+    Compares OS-observable fields only (see :meth:`ProcessIdentity.matches_live`).
+    """
 
     live = probe(recorded.pid)
     if live is None:
         raise IdentityMismatch(f"pid {recorded.pid} is not running")
-    if not recorded.matches(live):
+    if not recorded.matches_live(live):
         raise IdentityMismatch(
             f"pid {recorded.pid} does not match recorded identity "
             f"(likely PID reuse); refusing to signal"
