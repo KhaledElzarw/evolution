@@ -23,7 +23,18 @@ when its acceptance gate passes with recorded command output.
 > Scope note: "Core done" means the **new canonical Decimal path** correctly implements the
 > invariant with regression tests. Retrofitting the legacy float `engine.py` in place is
 > deliberately superseded by this path (legacy remains the migration *source*, per Phase 3).
-| 5 | Plugin SDK & isolation | Not started | — |
+
+### Phase 5 — evidence (actual)
+- `pytest tests/tradebot -q` → **45 passed** (19 new plugin tests)
+- Real subprocess isolation verified: `python -I`, sanitized env (secret probe returns
+  `ABSENT`), temp cwd, wall-clock timeout kill (infinite-loop strategy killed in ~3s),
+  structured crash/malformed-output reporting, quarantine strike lifecycle.
+- AST deny-by-default policy verified for all mandated forbidden modules/calls plus
+  alias and reflection escapes; bundle limits (16 files / 256 KiB), traversal & symlink
+  rejection, manifest schema (BTCUSDT-only) enforced.
+- Windows limitation documented: POSIX rlimits unavailable; parent timeout is the backstop.
+- Full suite: **448 passed, 11 failed** (same pre-existing platform failures; no regressions).
+| 5 | Plugin SDK & isolation | **Done** | `domain/strategies.py` SDK; `plugins/{validator,worker,worker_main,registry}.py`; `docs/strategy-plugin-sdk.md`; 19 tests (AST policy, traversal/symlink/size limits, real subprocess timeout kill, env-sanitization leak probe, quarantine) |
 | 6 | Initial 12 strategies & shadow pool | Not started | — |
 | 7 | DataBroker & local llama.cpp client | Not started | — |
 | 8 | Daily & weekly learning | Not started | — |
