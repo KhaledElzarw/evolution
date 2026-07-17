@@ -54,7 +54,7 @@ when its acceptance gate passes with recorded command output.
 | 5 | Plugin SDK & isolation | **Done** | `domain/strategies.py` SDK; `plugins/{validator,worker,worker_main,registry}.py`; `docs/strategy-plugin-sdk.md`; 19 tests (AST policy, traversal/symlink/size limits, real subprocess timeout kill, env-sanitization leak probe, quarantine) |
 | 6 | Initial 12 strategies & shadow pool | **Done** | `tradebot/strategies/` (12 modules + indicators + base); `application/portfolio.py`; 90 tests incl. 25-wallet deterministic replay, bit-reproducibility, active/shadow fairness, naming rule, 130k/120k split |
 | 7 | DataBroker & local llama.cpp client | **Done** | `infrastructure/data_broker/{policy,client}.py`, `infrastructure/llm/llama_cpp_client.py`; `docs/data-broker.md`; 32 tests (allowlist, SSRF/rebinding/redirect/userinfo/port/mime/size, sanitization, schema-repair, degrade-not-raise) |
-| 8 | Daily & weekly learning | Not started | — |
+| 8 | Daily & weekly learning | **Done** | `domain/lessons.py`, `application/lessons.py`, `reports/renderer.py`; 22 tests (schema-enforced hypothesis labelling, committee cannot reorder rank or spare a loser, engine facts override model, idempotency, degraded output, atomic rendering) |
 | 9 | Evolution, novelty & promotion | **Done** | `domain/{evaluations,lineage}.py`, `application/{evolution,liquidation,promotion,novelty}.py`; `docs/evolution-policy.md`; 55 tests (all replacement scenarios, ban reuse, roll-forward, shortage rollback, invariants, AST fingerprinting, novelty/mutation thresholds, lineage graph) |
 | 10 | Dark Horse | **Done** | `domain/dark_horse.py`, `application/dark_horse.py`; `docs/dark-horse.md`; 21 tests (five-domain committee, explicit missing/stale degradation, no-shorting type, elimination exemption via Phase 9 engine, wallet continuity across upgrade/rollback) |
 | 11 | API & dashboard rewrite | Not started | — |
@@ -106,3 +106,26 @@ when its acceptance gate passes with recorded command output.
   restore the 10,000 starting balance.
 - 21 new tests. New-package suite **231 passed**; ruff clean; full suite
   **634 passed / same 11 pre-existing failures**.
+
+### Phase 8 — evidence (actual)
+- A20 closed at the schema level: `Claim` REJECTS any statement lacking
+  `evidence_ids` unless explicitly labelled `is_hypothesis=True` — unsupported
+  claims are structurally impossible, not merely discouraged.
+- Committee restrictions enforced by validators, not convention:
+  ranking must be profit-descending with contiguous ranks; a losing or zero-fill
+  active row that is not marked eliminated fails validation. The committee
+  therefore cannot reorder the ranking or preserve a losing incumbent.
+- Engine owns the numbers: a deliberately lying analyst returning 999,999 profit
+  has its figures overwritten by the engine's facts
+  (`test_model_cannot_alter_deterministic_figures`); a sneaky synthesizer's
+  fabricated ranking is replaced by the engine's
+  (`test_weekly_committee_ranking_is_overridden_by_engine`).
+- Idempotency: daily and weekly generation call the model exactly once per
+  window; re-running returns the stored record (`cached=True`).
+- Degradation: model exception/None yields an explicit degraded record that keeps
+  the deterministic figures and invents no analysis; a weekly model failure still
+  produces the complete correct deterministic ranking.
+- Markdown is a derived export written atomically (temp + os.replace); re-render
+  is stable and leaves no .tmp files.
+- 22 new tests. New-package suite **253 passed**; ruff clean; full suite
+  **656 passed / same 11 pre-existing failures**.
