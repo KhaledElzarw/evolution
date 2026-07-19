@@ -278,7 +278,7 @@ HTML = r'''<!doctype html>
           <div class="sticky-summary" id="sticky-summary"></div>
         </div>
         <div class="control-strip">
-          <div class="mini-control mode-control"><span class="mini-icon">M</span><div><div class="label">Mode</div><div class="mode-toggle-group"><button class="btn mode-toggle segmented-toggle" type="button" data-mode="scalpy" id="mode-scalpy">Scalping</button><button class="btn mode-toggle segmented-toggle" type="button" data-mode="fatty" id="mode-fatty">Swinging</button><button class="btn mode-toggle segmented-toggle" type="button" data-mode="ai_optimized" id="mode-ai">AI Optimized</button></div></div></div>
+          <div class="mini-control mode-control"><span class="mini-icon">M</span><div><div class="label">Mode</div><strong id="state-mode">AI Optimized</strong><div class="mode-toggle-group"><button class="btn mode-toggle segmented-toggle" type="button" data-mode="scalpy" id="mode-scalpy">Scalping</button><button class="btn mode-toggle segmented-toggle" type="button" data-mode="fatty" id="mode-fatty">Swinging</button><button class="btn mode-toggle segmented-toggle" type="button" data-mode="ai_optimized" id="mode-ai">AI Optimized</button></div></div></div>
           <div class="mini-control"><span class="mini-icon">R</span><div><div class="label">Risk</div><strong id="state-risk" class="positive">Normal</strong></div></div>
           <div class="mini-control"><span class="mini-icon">E</span><div><div class="label">Exposure</div><strong id="state-exposure">--</strong></div></div>
           <div class="mini-control"><span class="mini-icon">N</span><div><div class="label">Next Action</div><strong id="state-action">Wait</strong></div></div>
@@ -1300,13 +1300,13 @@ def dashboard_mode_label(state: dict) -> str:
     if custom:
         return custom
     mode = str(state.get("gridMode") or "").strip().lower()
-    mapping = {
-        "scalpy": "Scalping",
-        "fatty": "Swinging",
-        "ai_optimized": "AI Optimized",
-        "flexy": "AI Optimized",
-    }
-    return mapping.get(mode, "AI Optimized")
+    ai = bool(state.get("aiEnabled"))
+    # Legacy/unsupported modes are hidden behind a generic "Grid" label; the
+    # AI-optimized family reports only the decision source (AI vs rules).
+    if mode in ("ai_optimized", "flexy"):
+        return "Optimized AI" if ai else "Rules"
+    base = {"scalpy": "Scalpy", "fatty": "Fatty"}.get(mode, "Grid")
+    return f"{base} + Local AI" if ai else f"{base} + Rules"
 
 
 def _strip_html(text: str) -> str:
@@ -1448,14 +1448,14 @@ def _fetch_news_items(
     return deduped
 
 
-def _deterministic_regime_rows(status: dict, ohlcv: list[dict], intelligence_error: str = "") -> tuple[list[dict], dict]:
+def _deterministic_regime_rows(status: dict, ohlcv: list[dict], intelligence_error: str = "", state: dict | None = None) -> tuple[list[dict], dict]:
     first, last = (ohlcv[0] if ohlcv else None), (ohlcv[-1] if ohlcv else None)
     change = (float(last.get("close") or 0) / float(first.get("open") or 1) - 1) if first and last else 0.0
     ranges = [float(c.get("high") or 0) - float(c.get("low") or 0) for c in (ohlcv or [])]
     avg_range = sum(ranges) / len(ranges) if ranges else 0.0
     price = float(status.get("price") or (last or {}).get("close") or 0.0)
     vol_pct = avg_range / price if price > 0 else 0.0
-    equity = float(state.get("dashboardEquityOverrideUsdt") or status.get("equityUsdt") or 0.0)
+    equity = float((state or {}).get("dashboardEquityOverrideUsdt") or status.get("equityUsdt") or 0.0)
     exposure = (float(status.get("btc") or 0.0) * price / equity) if equity > 0 else 0.0
     trend_status = "Range" if abs(change) < 0.015 else ("Uptrend" if change > 0 else "Downtrend")
     rows = [
@@ -1545,8 +1545,8 @@ def _news_sentiment(title_l: str) -> str:
     return "Neutral"
 
 
-def _fallback_intelligence(status: dict, ohlcv: list[dict], news_items: list[dict], error: str = "") -> dict:
-    rows, final = _deterministic_regime_rows(status, ohlcv, error)
+def _fallback_intelligence(status: dict, ohlcv: list[dict], news_items: list[dict], error: str = "", state: dict | None = None) -> dict:
+    rows, final = _deterministic_regime_rows(status, ohlcv, error, state)
     cards = []
     for item in (news_items or [])[:NEWS_CARD_LIMIT]:
         title_l = item.get("title", "").lower()
@@ -1591,10 +1591,10 @@ def refresh_intelligence(state: dict, status: dict, ohlcv: list[dict]) -> dict:
         if state.get("aiEnabled", True):
             assessed = _local_ai_assess_intelligence(state, status, ohlcv, news_items)
         else:
-            assessed = _fallback_intelligence(status, ohlcv, news_items, "local AI disabled")
+            assessed = _fallback_intelligence(status, ohlcv, news_items, "local AI disabled", state)
     except Exception as exc:
         error = str(exc)
-        assessed = _fallback_intelligence(status, ohlcv, news_items, error)
+        assessed = _fallback_intelligence(status, ohlcv, news_items, error, state)
     payload = {
         "generatedAtUtc": started.isoformat(),
         "nextRefreshAtUtc": datetime.fromtimestamp(started.timestamp() + INTELLIGENCE_REFRESH_SECONDS, timezone.utc).isoformat(),
@@ -2223,6 +2223,7 @@ def render_initial_dashboard_html(interval_override: str | None = None) -> str:
         'id="mode-scalpy">Scalping</button>': f'id="mode-scalpy" class="btn mode-toggle{" active" if mode_key == "scalpy" else ""}">Scalping</button>',
         'id="mode-fatty">Swinging</button>': f'id="mode-fatty" class="btn mode-toggle{" active" if mode_key == "fatty" else ""}">Swinging</button>',
         'id="mode-ai">AI Optimized</button>': f'id="mode-ai" class="btn mode-toggle{" active" if mode_key in {"ai_optimized", "flexy"} else ""}">AI Optimized</button>',
+        'id="state-mode">AI Optimized</strong>': f'id="state-mode">{html_lib.escape(mode)}</strong>',
         'id="state-risk" class="positive">Normal</strong>': f'id="state-risk" class="{_signed_class(1 if risk != "High" else -1)}">{html_lib.escape(risk)}</strong>',
         'id="state-exposure">--</strong>': f'id="state-exposure">{_fmt_pct(exposure)}</strong>',
         '<h2>BTC/USD · 1H · INDEX</h2>': f'<h2>BTC/USD · {html_lib.escape(SUPPORTED_INTERVALS[interval]["label"])} · INDEX</h2>',

@@ -4,6 +4,13 @@ import subprocess
 import time
 from pathlib import Path
 
+# SIGKILL does not exist on Windows; os.kill with SIGTERM there calls
+# TerminateProcess, which is already a forced kill. Resolving the escalation
+# signal once keeps stop_pid's escalation working on every platform (the old
+# direct signal.SIGKILL lookup raised AttributeError on Windows and was
+# silently swallowed, so the force-kill never happened).
+FORCE_KILL_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
 
 def get_python_executable(default_python: str) -> str:
     return os.getenv("TRADEBOT_PYTHON") or default_python
@@ -65,6 +72,6 @@ def stop_pid(
             return
         time.sleep(0.1)
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, FORCE_KILL_SIGNAL)
     except Exception:
         pass
