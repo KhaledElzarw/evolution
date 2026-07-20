@@ -70,7 +70,7 @@ from ..domain.strategies import StrategyContext, WalletView
 from ..strategies.builtin import BUILTIN_STRATEGIES
 from .app import create_app
 from .security import ApiSettings
-from .views import InMemoryPortfolioView
+from .views import InMemoryPortfolioView, money
 
 # nosec B105 - not a credential: a fixed, published, loopback-only dev token so
 # the operator can exercise the guarded mutation routes. Real deployments read
@@ -132,6 +132,79 @@ def build_live_market(interval: str = "5m", limit: int = 1000):
 
 class MarketDataUnavailable(RuntimeError):
     pass
+
+
+# ---- per-wallet trade recording (drill-down data) --------------------------
+
+
+def _iso(ms: int) -> str:
+    return (dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc)
+            .replace(tzinfo=None).isoformat() + "Z")
+
+
+def _realized_from_txn(txn) -> Decimal:
+    """Realized P&L booked by a fill (0 for buys). The sell posts a
+    ``realized_pnl`` leg equal to ``-realized`` (credit convention)."""
+
+    return -sum((p.amount for p in txn.postings if p.account == "realized_pnl"),
+                start=Decimal("0"))
+
+
+def _trade_record(snapshot: MarketSnapshot, intent: OrderIntent,
+                  result) -> dict:
+    """One row of a wallet's order history: what was asked, what happened."""
+
+    ts = _iso(snapshot.close_time_ms)
+    filled = result.accepted
+    txn = result.transaction
+    price = result.fill_price
+    filled_qty = txn.qty if txn is not None else Decimal("0")
+    notional = (quote(price * filled_qty)
+                if (price is not None and filled) else None)
+    return {
+        "order_id": intent.intent_id,
+        "placed_at": ts,
+        "filled_at": ts if filled else None,
+        "side": intent.side.value,
+        "order_type": intent.order_type.value,
+        "requested_qty": money(intent.quantity),
+        "filled_qty": money(filled_qty),
+        "price": money(price) if price is not None else None,
+        "notional": money(notional) if notional is not None else None,
+        "fee": money(txn.fee) if txn is not None else None,
+        "status": "filled" if filled else "rejected",
+        "reason": (result.reason.value if result.reason is not None
+                   else intent.reason_code),
+        "strategy_version_id": intent.strategy_version_id,
+        "realized_pnl": (money(_realized_from_txn(txn))
+                         if txn is not None else None),
+    }
+
+
+def _strategy_description(strategy_obj) -> str:
+    """A short human blurb from the strategy module's docstring."""
+
+    import inspect
+
+    module = inspect.getmodule(type(strategy_obj))
+    doc = (module.__doc__ or "").strip() if module is not None else ""
+    paras = [" ".join(p.split()) for p in doc.split("\n\n") if p.strip()]
+    if not paras:
+        return ""
+    # Paragraph 0 is the "Strategy N — Title" line; paragraph 1 is the summary.
+    return paras[1] if len(paras) > 1 else paras[0]
+
+
+_PERMANENT_DESCRIPTIONS = {
+    "dark-horse-v1": (
+        "Permanent wallet trading the real five-domain committee (technical, "
+        "liquidity, macro, fundamental, on-chain). It accumulates, reduces, or "
+        "exits to cash on a 4-hour cadence and is never reset."),
+    "dark-horse-daily-v1": (
+        "Permanent wallet that re-tunes its committee parameters every 24 hours "
+        "from every wallet's daily lessons, within engine guardrails. Like Dark "
+        "Horse it is never reset — only its strategy version advances."),
+}
 
 
 # ---- permanent-wallet committee (Dark Horse + Darkhorse - Daily) -----------
@@ -303,6 +376,7 @@ def build_view(now: dt.datetime, live: bool = False,
     # 0.00001, not the 1-satoshi default), so fills obey the true venue rules.
     execution = (ExecutionService(model=ExecutionModel(filters=filters))
                  if filters else ExecutionService())
+    trades: dict[str, list[dict]] = {}
     fills = 0
     seq = 0
     n = len(market)
@@ -343,8 +417,12 @@ def build_view(now: dt.datetime, live: bool = False,
                 quantity=qty, limit_price=None,
                 reason_code=f"committee_{reason}",
             )))
+        intents_by_id = {intent.intent_id: intent for _, intent in batch}
         for result in execution.process_tick(snapshot, batch):
             fills += result.accepted
+            intent = intents_by_id[result.intent_id]
+            trades.setdefault(result.wallet_id, []).append(
+                _trade_record(snapshot, intent, result))
 
     mark = market[-1].mark_price
     print(f"[devserver] replayed {n} candles across "
@@ -359,9 +437,15 @@ def build_view(now: dt.datetime, live: bool = False,
 
     llm_healthy, llm_model = probe_local_llm()
 
+    descriptions = {c().metadata().strategy_version_id: _strategy_description(c())
+                    for c in BUILTIN_STRATEGIES}
+    descriptions.update(_PERMANENT_DESCRIPTIONS)
+
     return InMemoryPortfolioView(
         portfolio=portfolio, mark_price=mark, now=now,
         archived_lifetime_pnl=Decimal("0.00"),
+        trades_by_wallet=trades,
+        strategy_descriptions=descriptions,
         llm_healthy=llm_healthy,
         llm_model_id=llm_model,
         source_status=[

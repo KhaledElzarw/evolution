@@ -206,6 +206,33 @@ def test_wallet_detail_and_404():
     assert c.get("/api/v2/wallets/nope").status_code == 404
 
 
+def test_wallet_drilldown_exposes_orders_insights_and_description():
+    view = make_view()
+    wid = view.portfolio.active[0].wallet.wallet_id
+    svid = view.portfolio.active[0].strategy_version_id
+    view.strategy_descriptions[svid] = "Trades the edge on pullbacks."
+    view.trades_by_wallet[wid] = [
+        {"order_id": "o1", "side": "BUY", "status": "filled",
+         "realized_pnl": None, "placed_at": "2026-07-20T00:00:00Z"},
+        {"order_id": "o2", "side": "SELL", "status": "filled",
+         "realized_pnl": "12.50", "placed_at": "2026-07-20T01:00:00Z"},
+        {"order_id": "o3", "side": "SELL", "status": "rejected",
+         "realized_pnl": None, "placed_at": "2026-07-20T02:00:00Z"},
+    ]
+    detail = view.wallet(wid)
+    assert detail["strategy_description"] == "Trades the edge on pullbacks."
+    ins = detail["insights"]
+    assert ins["trade_count"] == 2  # rejected order excluded from fills
+    assert ins["buy_count"] == 1 and ins["sell_count"] == 1
+    assert ins["win_count"] == 1 and ins["win_rate"] == "100.0%"
+    # Order history is newest-first and includes the rejected attempt.
+    orders = view.wallet_orders(wid)
+    assert [o["order_id"] for o in orders] == ["o3", "o2", "o1"]
+    # Fills exclude rejects; open orders default empty.
+    assert {o["order_id"] for o in view.wallet_fills(wid)} == {"o1", "o2"}
+    assert view.wallet_open_orders(wid) == []
+
+
 def test_wallet_naming_rule_in_api():
     w = client().get("/api/v2/wallets?kind=active").json()["wallets"][0]
     assert w["display_name"] == f"{w['strategy_name']}_0"
