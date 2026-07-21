@@ -169,14 +169,39 @@ def test_none_intents_are_filtered():
 
 # ---- per-strategy exits -----------------------------------------------------
 
-def test_s01_grid_sell_requires_fee_aware_edge():
+def test_s01_grid_rests_two_sided_with_fee_aware_ask():
     strategy = VolAdaptiveGrid()
     closes = flat(25) + [Decimal("60300")]
     state = strategy.initialize()
-    state.update({"anchor": "60000", "anchor_index": 1,
-                  "entry_price": "60290"})  # edge too thin
+    state.update({"anchor": "60000", "anchor_index": 1, "last_grid_index": 1})
     decision = strategy.on_market_snapshot(hold_ctx(closes), state)
-    assert not sells(decision)
+    ss = sells(decision)
+    bb = [i for i in decision.intents if i.side is Side.BUY]
+    # Genuinely two-sided: a resting bid below the anchor AND a resting ask above.
+    assert len(bb) == 1 and len(ss) == 1
+    assert all(i.order_type == "LIMIT" for i in decision.intents)
+    assert bb[0].limit_price < Decimal("60000")  # bid below the anchor
+    # The ask never sits below break-even + fee edge (avg_cost 60000 * 1.004).
+    assert ss[0].limit_price >= Decimal("60240")
+
+
+def test_any_grid_subclass_inherits_two_sided_resting():
+    from tradebot.strategies.grid import GridStrategy
+
+    class FutureGrid(GridStrategy):  # a hypothetical future grid
+        name = "FutureGrid"
+
+        def signal(self, context, candles, state, *, holding):
+            return self.grid_intents(context, candles, state)
+
+    g = FutureGrid()
+    closes = flat(25) + [Decimal("60300")]
+    state = g.initialize()
+    state.update({"anchor": "60000", "anchor_index": 1, "last_grid_index": 1})
+    decision = g.on_market_snapshot(hold_ctx(closes), state)
+    sides = {i.side for i in decision.intents}
+    assert sides == {Side.BUY, Side.SELL}  # both a bid and an ask, for free
+    assert all(i.order_type == "LIMIT" for i in decision.intents)
 
 
 def test_s01_grid_returns_early_without_volatility():

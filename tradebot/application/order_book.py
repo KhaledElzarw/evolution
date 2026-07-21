@@ -80,9 +80,18 @@ class RestingBook:
                 self._step_ms = step
 
     def rest(self, order: RestingOrder) -> None:
-        """Add a resting order to the wallet's ladder (oldest dropped past cap)."""
+        """Add a resting order to the wallet's ladder (oldest dropped past cap).
+
+        Identical (side, price) orders are de-duplicated: a strategy that re-posts
+        the same grid level every few candles keeps ONE resting order there, not a
+        stack of clones.
+        """
 
         ladder = self._orders.setdefault(order.wallet_id, [])
+        for existing in ladder:
+            if (existing.side is order.side
+                    and existing.limit_price == order.limit_price):
+                return
         ladder.append(order)
         if len(ladder) > MAX_PER_WALLET:
             del ladder[0]

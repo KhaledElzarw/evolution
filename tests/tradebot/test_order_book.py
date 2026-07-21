@@ -54,6 +54,15 @@ def test_wallet_holds_a_ladder_of_resting_orders():
     assert prices == {"59500", "59000"}
 
 
+def test_identical_orders_are_deduplicated():
+    book = RestingBook()
+    book.rest(buy_order(0, "59500"))
+    book.rest(buy_order(1, "59500"))  # same side + price -> ignored
+    assert book.count("w1") == 1
+    book.rest(buy_order(2, "59400"))  # distinct price -> added
+    assert book.count("w1") == 2
+
+
 def test_ladder_is_capped_dropping_the_oldest():
     book = RestingBook()
     for i in range(7):  # cap is 5
