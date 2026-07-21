@@ -71,6 +71,10 @@ class InMemoryPortfolioView:
     lineage_edges: list[dict] = field(default_factory=list)
     promotion_records: list[dict] = field(default_factory=list)
     evaluation_records: list[dict] = field(default_factory=list)
+    # Per-wallet drill-down data (populated by the seeder/harness; empty here).
+    trades_by_wallet: dict[str, list[dict]] = field(default_factory=dict)
+    open_orders_by_wallet: dict[str, list[dict]] = field(default_factory=dict)
+    strategy_descriptions: dict[str, str] = field(default_factory=dict)
 
     # -- system --------------------------------------------------------------
 
@@ -143,6 +147,8 @@ class InMemoryPortfolioView:
     def _wallet_dict(self, slot, kind: str) -> dict:
         w = slot.wallet
         equity = w.equity(self.mark_price)
+        completed = sum(1 for t in self.trades_by_wallet.get(w.wallet_id, [])
+                        if t.get("status") == "filled")
         return {
             "wallet_id": w.wallet_id,
             "display_name": display_name(slot, self.now),
@@ -154,9 +160,13 @@ class InMemoryPortfolioView:
             "starting_equity": "10000.00",
             "current_equity": money(equity),
             "lifetime_net_pnl": money(equity - Decimal("10000.00")),
+            "unrealized_pnl": money(w.unrealized_pnl(self.mark_price)),
+            "total_fees": money(w.total_fees),
             "btc_quantity": money(w.base_qty),
             "usdt_quantity": money(w.quote_cash),
             "realized_pnl": money(w.realized_pnl),
+            "open_orders": len(self.open_orders_by_wallet.get(w.wallet_id, [])),
+            "completed_orders": completed,
             "status": "active",
             "health": "ok",
         }
@@ -168,8 +178,42 @@ class InMemoryPortfolioView:
     def wallet(self, wallet_id: str) -> dict | None:
         for slot, kind in self._slots():
             if slot.wallet.wallet_id == wallet_id:
-                return self._wallet_dict(slot, kind)
+                detail = self._wallet_dict(slot, kind)
+                detail["strategy_description"] = self.strategy_descriptions.get(
+                    slot.strategy_version_id, "")
+                detail["insights"] = self._insights(slot)
+                detail["open_orders"] = self.wallet_open_orders(wallet_id)
+                return detail
         return None
+
+    def _insights(self, slot) -> dict:
+        """Compact performance snapshot for the wallet drill-down."""
+
+        w = slot.wallet
+        filled = [t for t in self.trades_by_wallet.get(w.wallet_id, [])
+                  if t.get("status") == "filled"]
+        buys = [t for t in filled if t.get("side") == "BUY"]
+        sells = [t for t in filled if t.get("side") == "SELL"]
+        wins = sum(1 for t in sells
+                   if Decimal(t.get("realized_pnl") or "0") > 0)
+        win_rate = (f"{Decimal(wins) / Decimal(len(sells)) * 100:.1f}%"
+                    if sells else None)
+        equity = w.equity(self.mark_price)
+        return {
+            "current_equity": money(equity),
+            "lifetime_net_pnl": money(equity - Decimal("10000.00")),
+            "realized_pnl": money(w.realized_pnl),
+            "unrealized_pnl": money(w.unrealized_pnl(self.mark_price)),
+            "total_fees": money(w.total_fees),
+            "avg_cost": money(w.avg_cost),
+            "btc_quantity": money(w.base_qty),
+            "usdt_quantity": money(w.quote_cash),
+            "trade_count": len(filled),
+            "buy_count": len(buys),
+            "sell_count": len(sells),
+            "win_count": wins,
+            "win_rate": win_rate,
+        }
 
     def wallet_equity(self, wallet_id: str) -> list[dict]:
         found = self.wallet(wallet_id)
@@ -178,10 +222,19 @@ class InMemoryPortfolioView:
         return [{"time": self.now.isoformat(), "equity": found["current_equity"]}]
 
     def wallet_orders(self, wallet_id: str) -> list[dict]:
-        return []
+        """Full order history (filled + rejected), newest first."""
+
+        return list(reversed(self.trades_by_wallet.get(wallet_id, [])))
 
     def wallet_fills(self, wallet_id: str) -> list[dict]:
-        return []
+        return [t for t in self.wallet_orders(wallet_id)
+                if t.get("status") == "filled"]
+
+    def wallet_open_orders(self, wallet_id: str) -> list[dict]:
+        """Resting orders awaiting a fill. The paper harness executes or
+        rejects every intent on its own candle, so this is normally empty."""
+
+        return list(self.open_orders_by_wallet.get(wallet_id, []))
 
     def wallet_ledger(self, wallet_id: str) -> list[dict]:
         return []

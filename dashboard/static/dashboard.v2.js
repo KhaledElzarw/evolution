@@ -168,25 +168,79 @@ const COLUMNS = [
   ['starting_equity', 'Starting'],
   ['current_equity', 'Equity'],
   ['lifetime_net_pnl', 'Lifetime P&L'],
+  ['unrealized_pnl', 'Unrealized P&L'],
+  ['total_fees', 'Fees'],
   ['btc_quantity', 'BTC'],
   ['usdt_quantity', 'USDT'],
+  ['open_orders', 'Open orders'],
+  ['completed_orders', 'Completed orders'],
   ['status', 'Status'],
   ['health', 'Health'],
 ];
 
-function renderWallets(root, wallets) {
+/** Compare two wallet rows on `key`; numeric when both sides look numeric. */
+function compareWallets(a, b, key) {
+  const av = a[key], bv = b[key];
+  const numeric = (v) => typeof v === 'number'
+    || (typeof v === 'string' && v.trim() !== '' && /^-?\d/.test(v.trim()) && !isNaN(parseFloat(v)));
+  if (numeric(av) && numeric(bv)) return parseFloat(av) - parseFloat(bv);
+  return String(av === undefined || av === null ? '' : av)
+    .localeCompare(String(bv === undefined || bv === null ? '' : bv));
+}
+
+const SORT_GLYPH = { asc: ' ▲', desc: ' ▼' };
+
+function renderWallets(root, wallets, onSelect, sort) {
   clear(root);
   if (!Array.isArray(wallets) || wallets.length === 0) {
     root.appendChild(emptyNode('No wallets match this filter.'));
     return;
   }
 
+  // Shared, persisted across header clicks within this render.
+  const sortState = sort || { key: null, dir: 'asc' };
+
+  const rows = wallets.slice();
+  if (sortState.key) {
+    rows.sort((a, b) => compareWallets(a, b, sortState.key));
+    if (sortState.dir === 'desc') rows.reverse();
+  }
+
+  const onHeader = (key) => {
+    if (sortState.key === key) {
+      sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortState.key = key;
+      sortState.dir = 'asc';
+    }
+    renderWallets(root, wallets, onSelect, sortState);
+  };
+
   const head = el('tr', {
-    children: COLUMNS.map(([, label]) => el('th', { text: label, attrs: { scope: 'col' } })),
+    children: COLUMNS.map(([key, label]) => {
+      const active = sortState.key === key;
+      const th = el('th', {
+        className: active ? 'sortable sortable--active' : 'sortable',
+        text: label + (active ? SORT_GLYPH[sortState.dir] : ''),
+        attrs: {
+          scope: 'col', role: 'button', tabindex: '0',
+          'aria-sort': active ? (sortState.dir === 'asc' ? 'ascending' : 'descending') : 'none',
+          'aria-label': `Sort by ${label}`,
+        },
+      });
+      th.addEventListener('click', () => onHeader(key));
+      th.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onHeader(key); }
+      });
+      return th;
+    }),
   });
   const body = el('tbody', {
-    children: wallets.map((w) =>
-      el('tr', {
+    children: rows.map((w) => {
+      const row = el('tr', {
+        className: 'wallet-row',
+        attrs: { tabindex: '0', role: 'button',
+          'aria-label': `View details for ${w.display_name || w.wallet_id}` },
         children: COLUMNS.map(([key], i) => {
           const value = w[key];
           const cell = el(i === 0 ? 'th' : 'td', {
@@ -195,8 +249,16 @@ function renderWallets(root, wallets) {
           if (i === 0) cell.setAttribute('scope', 'row');
           return cell;
         }),
-      })
-    ),
+      });
+      if (typeof onSelect === 'function' && w.wallet_id) {
+        const open = () => onSelect(w.wallet_id);
+        row.addEventListener('click', open);
+        row.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+        });
+      }
+      return row;
+    }),
   });
 
   const table = el('table', {
@@ -243,6 +305,178 @@ function renderFilters(root, current, onChange) {
   root.appendChild(group);
 }
 
+/* ---------------------------------------------------- wallet drill-down */
+
+const INSIGHTS = [
+  ['current_equity', 'Current equity'],
+  ['lifetime_net_pnl', 'Lifetime P&L'],
+  ['realized_pnl', 'Realized P&L'],
+  ['unrealized_pnl', 'Unrealized P&L'],
+  ['total_fees', 'Fees paid'],
+  ['btc_quantity', 'BTC held'],
+  ['avg_cost', 'Avg cost'],
+  ['usdt_quantity', 'USDT cash'],
+  ['trade_count', 'Trades'],
+  ['buy_count', 'Buys'],
+  ['sell_count', 'Sells'],
+  ['win_rate', 'Sell win rate'],
+];
+
+const ORDER_COLUMNS = [
+  ['placed_at', 'Placed'],
+  ['filled_at', 'Filled'],
+  ['side', 'Side'],
+  ['order_type', 'Type'],
+  ['requested_qty', 'Req. qty'],
+  ['filled_qty', 'Filled qty'],
+  ['price', 'Price'],
+  ['notional', 'Notional'],
+  ['fee', 'Fee'],
+  ['realized_pnl', 'Realized'],
+  ['status', 'Status'],
+  ['reason', 'Reason'],
+];
+
+// Resting orders carry a different (smaller) shape than filled history rows.
+const OPEN_ORDER_COLUMNS = [
+  ['side', 'Side'],
+  ['order_type', 'Type'],
+  ['limit_price', 'Limit price'],
+  ['quantity', 'Quantity'],
+  ['reason_code', 'Reason'],
+  ['status', 'Status'],
+];
+
+function overlayRoot() {
+  let root = document.getElementById('wallet-detail');
+  if (!root) {
+    root = el('div', { attrs: { id: 'wallet-detail' } });
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function closeWalletDetail() {
+  const root = document.getElementById('wallet-detail');
+  if (root) clear(root);
+}
+
+function insightGrid(insights) {
+  return el('div', {
+    className: 'insights',
+    children: INSIGHTS.map(([key, label]) => {
+      const v = insights ? insights[key] : null;
+      return el('div', {
+        className: 'insight',
+        children: [
+          el('span', { className: 'insight__label', text: label }),
+          el('span', { className: 'insight__value',
+            text: v === undefined || v === null ? '—' : v }),
+        ],
+      });
+    }),
+  });
+}
+
+function orderTable(orders, caption) {
+  if (!Array.isArray(orders) || orders.length === 0) {
+    return emptyNode(caption === 'open'
+      ? 'No resting orders right now — limit orders rest here until they fill or expire.'
+      : 'No orders recorded for this wallet.');
+  }
+  const columns = caption === 'open' ? OPEN_ORDER_COLUMNS : ORDER_COLUMNS;
+  const head = el('tr', {
+    children: columns.map(([, label]) =>
+      el('th', { text: label, attrs: { scope: 'col' } })),
+  });
+  const body = el('tbody', {
+    children: orders.map((o) => el('tr', {
+      className: o.status === 'rejected' ? 'order-row order-row--rejected' : 'order-row',
+      children: columns.map(([key]) => {
+        const v = o[key];
+        return el('td', {
+          className: key === 'side' ? `side side--${String(v).toLowerCase()}` : undefined,
+          text: v === undefined || v === null ? '—' : v,
+        });
+      }),
+    })),
+  });
+  return el('div', {
+    className: 'table-wrap',
+    children: [el('table', {
+      className: 'orders',
+      children: [
+        el('caption', { text: `${orders.length} order(s)` }),
+        el('thead', { children: [head] }),
+        body,
+      ],
+    })],
+  });
+}
+
+function renderWalletDetail(root, wallet, orders) {
+  clear(root);
+  const openOrders = (wallet && wallet.open_orders) || [];
+
+  const closeBtn = el('button', {
+    className: 'detail__close', text: '✕',
+    attrs: { type: 'button', 'aria-label': 'Close wallet details' },
+  });
+  closeBtn.addEventListener('click', closeWalletDetail);
+
+  const panel = el('div', {
+    className: 'detail__panel',
+    attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Wallet details' },
+    children: [
+      closeBtn,
+      el('h2', { className: 'detail__title', text: wallet.display_name || wallet.wallet_id }),
+      el('p', { className: 'detail__meta',
+        text: `${wallet.strategy_name || '—'} · ${wallet.strategy_version_id || '—'} · ${wallet.kind || ''}` }),
+      el('p', { className: 'detail__desc',
+        text: wallet.strategy_description || 'No strategy description available.' }),
+      el('h3', { className: 'detail__h', text: 'Performance' }),
+      insightGrid(wallet.insights),
+      el('h3', { className: 'detail__h', text: 'Open orders' }),
+      orderTable(openOrders, 'open'),
+      el('h3', { className: 'detail__h', text: 'Order history' }),
+      orderTable(orders, 'history'),
+    ],
+  });
+
+  const backdrop = el('div', { className: 'detail__backdrop', children: [panel] });
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeWalletDetail(); });
+  root.appendChild(backdrop);
+  closeBtn.focus();
+}
+
+async function openWalletDetail(walletId) {
+  const root = overlayRoot();
+  clear(root);
+  root.appendChild(el('div', {
+    className: 'detail__backdrop',
+    children: [el('div', { className: 'detail__panel', children: [loadingNode()] })],
+  }));
+  try {
+    const [wallet, ordersResp] = await Promise.all([
+      getJson(`/wallets/${encodeURIComponent(walletId)}`),
+      getJson(`/wallets/${encodeURIComponent(walletId)}/orders`),
+    ]);
+    renderWalletDetail(root, wallet, ordersResp.orders || []);
+  } catch {
+    clear(root);
+    const box = el('div', { className: 'detail__panel', children: [
+      errorNode('Could not load wallet details.'),
+    ] });
+    const backdrop = el('div', { className: 'detail__backdrop', children: [box] });
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeWalletDetail(); });
+    root.appendChild(backdrop);
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeWalletDetail(); });
+}
+
 /* -------------------------------------------------------------- controller */
 
 async function load(state) {
@@ -264,7 +498,7 @@ async function load(state) {
   try {
     const query = state.filter === 'all' ? '' : `?kind=${encodeURIComponent(state.filter)}`;
     const data = await getJson(`/wallets${query}`);
-    renderWallets(walletRoot, data.wallets);
+    renderWallets(walletRoot, data.wallets, openWalletDetail);
   } catch {
     clear(walletRoot);
     walletRoot.appendChild(errorNode('Could not load wallets.'));
@@ -291,5 +525,5 @@ if (typeof document !== 'undefined' && document.readyState !== 'loading') {
 
 /* Exported for tests (Node/jsdom). */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { el, clear, safeUrl, safeLink, renderSummary, renderWallets, renderFilters, stateNode };
+  module.exports = { el, clear, safeUrl, safeLink, renderSummary, renderWallets, renderFilters, stateNode, renderWalletDetail, insightGrid, orderTable };
 }
