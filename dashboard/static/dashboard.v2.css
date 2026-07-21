@@ -118,6 +118,11 @@ table.wallets thead th {
 table.wallets tbody tr:hover { background: var(--panel-2); }
 table.wallets td { font-variant-numeric: tabular-nums; }
 
+.bs { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bs__buy { color: var(--good); font-weight: 600; }
+.bs__sell { color: var(--bad); font-weight: 600; }
+.bs__sep { color: var(--muted); margin: 0 .2em; }
+
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }
 th.sortable--active { color: var(--accent); }

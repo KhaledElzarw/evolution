@@ -144,11 +144,21 @@ class InMemoryPortfolioView:
             out.append((self.portfolio.dark_horse_daily, "dark_horse_daily"))
         return out
 
+    @staticmethod
+    def _side_split(rows) -> tuple[int, int]:
+        """(#BUY, #SELL) over a list of order/fill rows."""
+
+        buys = sum(1 for r in rows if r.get("side") == "BUY")
+        return buys, len(rows) - buys
+
     def _wallet_dict(self, slot, kind: str) -> dict:
         w = slot.wallet
         equity = w.equity(self.mark_price)
-        completed = sum(1 for t in self.trades_by_wallet.get(w.wallet_id, [])
-                        if t.get("status") == "filled")
+        filled = [t for t in self.trades_by_wallet.get(w.wallet_id, [])
+                  if t.get("status") == "filled"]
+        open_rows = self.open_orders_by_wallet.get(w.wallet_id, [])
+        completed_buy, completed_sell = self._side_split(filled)
+        open_buy, open_sell = self._side_split(open_rows)
         return {
             "wallet_id": w.wallet_id,
             "display_name": display_name(slot, self.now),
@@ -165,8 +175,14 @@ class InMemoryPortfolioView:
             "btc_quantity": money(w.base_qty),
             "usdt_quantity": money(w.quote_cash),
             "realized_pnl": money(w.realized_pnl),
-            "open_orders": len(self.open_orders_by_wallet.get(w.wallet_id, [])),
-            "completed_orders": completed,
+            # Totals drive sorting; the *_buy/*_sell split drives the coloured
+            # "buys/sells" cell in the table.
+            "open_orders": len(open_rows),
+            "open_orders_buy": open_buy,
+            "open_orders_sell": open_sell,
+            "completed_orders": len(filled),
+            "completed_orders_buy": completed_buy,
+            "completed_orders_sell": completed_sell,
             "status": "active",
             "health": "ok",
         }

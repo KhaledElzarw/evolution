@@ -178,6 +178,22 @@ const COLUMNS = [
   ['health', 'Health'],
 ];
 
+// Columns rendered as a coloured "buys/sells" split (green/red) instead of a
+// bare total. The total still lives under `key` so sorting stays numeric.
+const SPLIT_COLUMNS = new Set(['open_orders', 'completed_orders']);
+
+/** A "6/4" cell: buys in green, sells in red. */
+function buySellNode(buy, sell) {
+  return el('span', {
+    className: 'bs',
+    children: [
+      el('span', { className: 'bs__buy', text: String(buy ?? 0) }),
+      el('span', { className: 'bs__sep', text: '/' }),
+      el('span', { className: 'bs__sell', text: String(sell ?? 0) }),
+    ],
+  });
+}
+
 /** Compare two wallet rows on `key`; numeric when both sides look numeric. */
 function compareWallets(a, b, key) {
   const av = a[key], bv = b[key];
@@ -242,10 +258,13 @@ function renderWallets(root, wallets, onSelect, sort) {
         attrs: { tabindex: '0', role: 'button',
           'aria-label': `View details for ${w.display_name || w.wallet_id}` },
         children: COLUMNS.map(([key], i) => {
-          const value = w[key];
-          const cell = el(i === 0 ? 'th' : 'td', {
-            text: value === undefined || value === null ? '—' : value,
-          });
+          const cell = el(i === 0 ? 'th' : 'td', {});
+          if (SPLIT_COLUMNS.has(key)) {
+            cell.appendChild(buySellNode(w[`${key}_buy`], w[`${key}_sell`]));
+          } else {
+            const value = w[key];
+            cell.textContent = value === undefined || value === null ? '—' : value;
+          }
           if (i === 0) cell.setAttribute('scope', 'row');
           return cell;
         }),

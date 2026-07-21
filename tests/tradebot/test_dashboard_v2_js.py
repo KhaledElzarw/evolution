@@ -107,6 +107,9 @@ def test_new_columns_and_sorting_are_present():
     assert "compareWallets" in CODE
     for token in ("aria-sort", "ascending", "descending"):
         assert token in CODE
+    # Buys/sells split cell (green/red) for the order-count columns.
+    assert "buySellNode" in CODE and "SPLIT_COLUMNS" in CODE
+    assert "bs__buy" in CODE and "bs__sell" in CODE
 
 
 def test_legacy_v1_dashboard_still_present_but_v2_is_clean():
