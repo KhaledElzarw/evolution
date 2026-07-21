@@ -17,7 +17,6 @@ from ..grid import GridStrategy
 
 class VolAdaptiveGrid(GridStrategy):
     name = "VolAdaptiveGrid"
-    min_warmup = 20
 
     def signal(self, context: StrategyContext,
                candles: tuple[MarketSnapshot, ...],

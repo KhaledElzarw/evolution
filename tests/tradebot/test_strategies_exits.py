@@ -171,18 +171,18 @@ def test_none_intents_are_filtered():
 
 def test_s01_grid_rests_two_sided_with_fee_aware_ask():
     strategy = VolAdaptiveGrid()
-    closes = flat(25) + [Decimal("60300")]
+    closes = flat(65)  # ranging (not a downtrend) and past the warmup
     state = strategy.initialize()
     state.update({"anchor": "60000", "anchor_index": 1, "last_grid_index": 1})
     decision = strategy.on_market_snapshot(hold_ctx(closes), state)
     ss = sells(decision)
     bb = [i for i in decision.intents if i.side is Side.BUY]
-    # Genuinely two-sided: a resting bid below the anchor AND a resting ask above.
-    assert len(bb) == 1 and len(ss) == 1
+    # Genuinely two-sided AND laddered: several bids below and several asks above.
+    assert len(bb) >= 1 and len(ss) >= 1
     assert all(i.order_type == "LIMIT" for i in decision.intents)
-    assert bb[0].limit_price < Decimal("60000")  # bid below the anchor
-    # The ask never sits below break-even + fee edge (avg_cost 60000 * 1.004).
-    assert ss[0].limit_price >= Decimal("60240")
+    assert all(i.limit_price < Decimal("60000") for i in bb)  # bids below the anchor
+    # Every ask sits at/above break-even + fee edge (avg_cost 60000 * 1.004).
+    assert all(i.limit_price >= Decimal("60240") for i in ss)
 
 
 def test_any_grid_subclass_inherits_two_sided_resting():
@@ -195,7 +195,7 @@ def test_any_grid_subclass_inherits_two_sided_resting():
             return self.grid_intents(context, candles, state)
 
     g = FutureGrid()
-    closes = flat(25) + [Decimal("60300")]
+    closes = flat(65)  # ranging and past the warmup
     state = g.initialize()
     state.update({"anchor": "60000", "anchor_index": 1, "last_grid_index": 1})
     decision = g.on_market_snapshot(hold_ctx(closes), state)

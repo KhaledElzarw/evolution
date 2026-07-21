@@ -38,9 +38,9 @@ def flat_noise(n, level=60000, amp=5):
 
 
 def test_s01_grid_buys_below_anchor_and_never_on_recenter_candle():
-    closes = flat_noise(25) + [Decimal("59900")] * 3  # below anchor - ATR spacing
+    closes = flat_noise(70)  # ranging (not a downtrend), enough for warmup + slow MA
     decisions, state = run_ticks(VolAdaptiveGrid(), series(closes))
-    assert buys(decisions), "grid should buy below the spaced level"
+    assert buys(decisions), "grid should rest bids in a range"
     assert state["anchor"] is not None
 
 

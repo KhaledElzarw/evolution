@@ -33,7 +33,7 @@ from ..domain.ledger import Side
 from ..domain.market import MarketSnapshot
 
 DEFAULT_EXPIRY_CANDLES = 24  # 2 hours at a 5-minute cadence
-MAX_PER_WALLET = 5  # cap the resting ladder so a runaway loop can't grow it
+MAX_PER_WALLET = 12  # room for a two-sided ladder (n bids + n asks)
 
 
 @dataclass(frozen=True, slots=True)

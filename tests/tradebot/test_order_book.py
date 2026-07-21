@@ -2,7 +2,11 @@
 
 from decimal import Decimal
 
-from tradebot.application.order_book import RestingBook, RestingOrder
+from tradebot.application.order_book import (
+    MAX_PER_WALLET,
+    RestingBook,
+    RestingOrder,
+)
 from tradebot.domain.ledger import Side
 from tradebot.domain.market import MarketSnapshot
 
@@ -65,11 +69,12 @@ def test_identical_orders_are_deduplicated():
 
 def test_ladder_is_capped_dropping_the_oldest():
     book = RestingBook()
-    for i in range(7):  # cap is 5
+    n = MAX_PER_WALLET + 2
+    for i in range(n):  # distinct prices so none are de-duplicated
         book.rest(buy_order(i, str(59000 - i)))
-    assert book.count("w1") == 5
+    assert book.count("w1") == MAX_PER_WALLET
     ids = {r["order_id"] for r in book.snapshot_open()["w1"]}
-    assert ids == {"o2", "o3", "o4", "o5", "o6"}  # o0, o1 dropped
+    assert ids == {f"o{i}" for i in range(2, n)}  # the two oldest dropped
 
 
 def test_at_most_one_fill_per_wallet_per_candle():
