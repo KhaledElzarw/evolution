@@ -112,7 +112,11 @@ class RestingBook:
         if not step:
             return []
         expired: list[RestingOrder] = []
-        for wallet_id, ladder in list(self._orders.items()):
+        # Sorted wallet order: processing (and thus downstream intent-id
+        # assignment) is deterministic regardless of dict insertion history —
+        # required for restart/restore bit-reproducibility.
+        for wallet_id in sorted(self._orders):
+            ladder = self._orders[wallet_id]
             kept = []
             for order in ladder:
                 if order.candles_elapsed(snapshot, step) > order.expires_after_candles:
@@ -131,7 +135,8 @@ class RestingBook:
         """
 
         due: list[RestingOrder] = []
-        for wallet_id, ladder in self._orders.items():
+        for wallet_id in sorted(self._orders):  # deterministic (see expire)
+            ladder = self._orders[wallet_id]
             for i, order in enumerate(ladder):
                 if order.is_marketable(snapshot):
                     due.append(order)

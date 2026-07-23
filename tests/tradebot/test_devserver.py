@@ -20,6 +20,7 @@ from tradebot.api.devserver import (
     _port_in_use,
     build_market,
     build_view,
+    merge_closed_candles,
 )
 from tradebot.application.portfolio import WalletSlot, seed_portfolio
 from tradebot.domain.dark_horse import REQUIRED_DOMAINS, DomainStatus
@@ -136,3 +137,22 @@ def test_port_in_use_detects_a_bound_socket():
         assert _port_in_use("127.0.0.1", port) is True
     # Once released, the same port is free again.
     assert _port_in_use("127.0.0.1", port) is False
+
+
+def test_merge_closed_candles_appends_only_newer_bars():
+    existing = tuple(_candle(i, 60_000.0, 20, 20, 10) for i in range(3))
+    # Overlaps bars 1-2, brings new bars 3-4.
+    fetched = tuple(_candle(i, 61_000.0, 20, 20, 10) for i in range(1, 5))
+    merged = merge_closed_candles(existing, fetched)
+    assert [c.open_time_ms for c in merged] == [i * FIVE_MIN_MS for i in range(5)]
+    # Existing bars are kept as-is (no replacement by the refetched copies).
+    assert merged[:3] == existing
+
+
+def test_merge_closed_candles_caps_retention_and_handles_no_news():
+    existing = tuple(_candle(i, 60_000.0, 20, 20, 10) for i in range(5))
+    assert merge_closed_candles(existing, existing) is existing  # nothing new
+    fetched = (_candle(5, 60_000.0, 20, 20, 10),)
+    merged = merge_closed_candles(existing, fetched, retention=4)
+    assert len(merged) == 4
+    assert merged[-1].open_time_ms == 5 * FIVE_MIN_MS

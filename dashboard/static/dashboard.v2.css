@@ -312,6 +312,44 @@ table.orders td { font-variant-numeric: tabular-nums; }
 .kv__k { color: var(--muted); }
 .kv__v { font-variant-numeric: tabular-nums; text-align: right; }
 
+/* ---- live trading status strip + market awareness panel ---- */
+
+.trading-status { display: flex; align-items: center; gap: .6rem;
+  margin-top: .35rem; font-size: .8rem; }
+.trading-chip { border-radius: 999px; padding: .12rem .6rem;
+  font-weight: 600; font-size: .74rem; border: 1px solid var(--border); }
+.trading-chip--ok { color: var(--good); border-color: var(--good); }
+.trading-chip--warn { color: var(--warn); border-color: var(--warn); }
+.trading-chip--off { color: var(--muted); }
+.trading-meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.awareness-panel { display: flex; flex-direction: column; gap: .6rem; }
+.awareness-head { display: flex; align-items: center; gap: .6rem; }
+.awareness-badge { border-radius: 999px; padding: .12rem .6rem;
+  font-weight: 600; font-size: .74rem; border: 1px solid var(--border); }
+.awareness-badge--ok { color: var(--good); border-color: var(--good); }
+.awareness-badge--warn { color: var(--warn); border-color: var(--warn); }
+.awareness-meta { color: var(--muted); font-size: .78rem; }
+.awareness-summary { margin: 0; font-size: .88rem; }
+.awareness-grid { display: grid; gap: .6rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.awareness-card { background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: .55rem .7rem; display: flex;
+  flex-direction: column; gap: .25rem; }
+.awareness-card--up { border-left: 3px solid var(--good); }
+.awareness-card--down { border-left: 3px solid var(--bad); }
+.awareness-card--flat { border-left: 3px solid var(--border); }
+.awareness-domain { font-size: .78rem; font-weight: 600; color: var(--accent);
+  text-transform: capitalize; }
+.awareness-stance { font-size: .84rem; font-weight: 600; }
+.awareness-card--up .awareness-stance { color: var(--good); }
+.awareness-card--down .awareness-stance { color: var(--bad); }
+.awareness-conf { font-size: .76rem; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.awareness-rationale { font-size: .8rem; }
+.awareness-sources { font-size: .72rem; color: var(--muted); }
+.awareness-errors { margin: 0; font-size: .76rem; color: var(--warn); }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }

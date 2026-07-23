@@ -354,3 +354,21 @@ def test_normal_sized_body_still_passes():
     r = client().post("/api/v2/reports/daily/refresh", json={"date": "2026-07-16"},
                       headers={"Authorization": f"Bearer {TOKEN}"})
     assert r.status_code == 200
+
+
+# ---- live-loop + awareness read models --------------------------------------
+
+def test_live_status_route_empty_in_static_mode():
+    r = client().get("/api/v2/system/live")
+    assert r.status_code == 200
+    assert r.json() == {"live": {}}
+
+
+def test_awareness_route_reflects_published_block():
+    view = make_view()
+    view.live_status = {"mode": "live", "last_tick_ms": 123, "caught_up": True,
+                        "total_fills": 7}
+    view.awareness = {"status": "ok", "summary": "calm", "domains": []}
+    c = TestClient(create_app(view, ApiSettings(auth_token=TOKEN)))
+    assert c.get("/api/v2/system/live").json()["live"]["total_fills"] == 7
+    assert c.get("/api/v2/system/awareness").json()["awareness"]["summary"] == "calm"

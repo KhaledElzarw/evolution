@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>tradebot — multi-wallet portfolio</title>
+  <title>Evolution — multi-wallet portfolio</title>
   <link rel="stylesheet" href="/static/dashboard.v2.css">
 </head>
 <body>
   <a class="skip-link" href="#wallets">Skip to wallet table</a>
 
   <header class="masthead">
-    <h1>Evolutionary Multi-Wallet Portfolio</h1>
-    <p class="subtitle">BTCUSDT paper trading — research simulator. No real orders are placed.</p>
+    <h1>Evolution</h1>
+    <p class="subtitle">Evolutionary multi-wallet BTCUSDT paper trading — live market data, research simulator. No real orders are placed.</p>
     <div id="live-status" class="live-status" role="status" aria-live="polite"></div>
+    <div id="trading-status" class="trading-status" role="status"></div>
   </header>
 
   <main>
@@ -23,6 +24,11 @@
     <section aria-labelledby="insights-heading">
       <h2 id="insights-heading">Insights</h2>
       <div id="insights" class="insights-grid"></div>
+    </section>
+
+    <section aria-labelledby="awareness-heading">
+      <h2 id="awareness-heading">Market awareness</h2>
+      <div id="awareness" class="awareness-panel"></div>
     </section>
 
     <section aria-labelledby="wallets-heading">

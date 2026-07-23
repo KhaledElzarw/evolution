@@ -34,6 +34,9 @@ class LlmConfig:
     expected_model_artifact: str = EXPECTED_MODEL_ARTIFACT
     temperature: float = 0.0  # deterministic default
     max_repair_attempts: int = 1
+    # llama.cpp's server-side default n_predict is small enough to truncate a
+    # multi-domain JSON reply mid-string; be explicit about the budget.
+    max_tokens: int = 1024
 
 
 @dataclass(slots=True)
@@ -120,6 +123,7 @@ class LlamaCppClient:
                         "model": model_id,
                         "messages": convo,
                         "temperature": self.config.temperature,
+                        "max_tokens": self.config.max_tokens,
                         "response_format": {"type": "json_object"},
                     },
                 )
@@ -134,7 +138,7 @@ class LlamaCppClient:
 
             content = _extract_content(body)
             try:
-                parsed = json.loads(content)
+                parsed = _loads_with_salvage(content)
                 model = schema.model_validate(parsed)
                 run.status = "ok"
                 return model, run
@@ -150,6 +154,42 @@ class LlamaCppClient:
                     })
                     convo = convo + [repair]
         return None, run
+
+
+def _loads_with_salvage(content: str):
+    """Parse JSON; on failure, close any unbalanced brackets and retry once.
+
+    llama.cpp's ``json_object`` mode occasionally emits EOS with
+    ``finish_reason: stop`` while the trailing ``}``/``]`` are missing. The
+    payload is otherwise intact, so appending the missing closers (computed
+    outside string literals) recovers it; anything still broken re-raises and
+    flows into the normal repair retry.
+    """
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    stack = []
+    in_str = False
+    escape = False
+    for ch in content:
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+    closers = ('"' if in_str else "") + "".join(reversed(stack))
+    return json.loads(content + closers)
 
 
 def _extract_content(body: dict) -> str:

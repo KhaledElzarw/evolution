@@ -2,7 +2,7 @@
 
 ## Operating principles
 
-This runbook describes local operation for the tradebot repository. It does not
+This runbook describes local operation for the Evolution repository. It does not
 change application behavior, runtime paths, trading strategy, or execution
 logic.
 

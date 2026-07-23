@@ -1,4 +1,4 @@
-# Tradebot — Product Evidence Showcase
+# Evolution — Product Evidence Showcase
 
 *A personal, hands-on AI/agentic product build: a locally-run trading automation system with a multi-agent AI decisioning layer, human-in-the-loop controls, and full operational telemetry.*
 

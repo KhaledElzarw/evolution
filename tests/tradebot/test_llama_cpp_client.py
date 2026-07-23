@@ -108,3 +108,19 @@ def test_deterministic_temperature_default():
     client = LlamaCppClient(t)
     client.generate_structured(LessonOut, [{"role": "user", "content": "x"}])
     assert t.post_calls[0]["temperature"] == 0.0
+
+
+def test_truncated_json_is_salvaged_by_closing_brackets():
+    """llama.cpp json_object mode sometimes drops trailing closers at EOS."""
+
+    from tradebot.infrastructure.llm.llama_cpp_client import _loads_with_salvage
+
+    full = {"summary": "x", "domains": [{"domain": "macro", "stance": 0.1}]}
+    import json as _json
+    text = _json.dumps(full)
+    assert _loads_with_salvage(text) == full                 # intact passes
+    assert _loads_with_salvage(text[:-1]) == full            # missing }
+    assert _loads_with_salvage(text[:-2]) == full            # missing }]
+    # Truncated inside a string: closed as an (incomplete) value, not an error.
+    cut = '{"summary": "trunc'
+    assert _loads_with_salvage(cut) == {"summary": "trunc"}

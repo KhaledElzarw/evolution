@@ -1,4 +1,4 @@
-# Evolutionary Multi-Wallet Trading Platform
+# Evolution — Evolutionary Multi-Wallet Trading Platform
 
 **A self-evolving BTCUSDT paper-trading research platform.** Twenty-five isolated
 wallets compete every week. Losers are eliminated and permanently banned. A local

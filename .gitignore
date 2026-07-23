@@ -37,3 +37,4 @@ trades_trend.jsonl
 advisor.log
 engine.log
 engine_trend.log
+evolution_state.json

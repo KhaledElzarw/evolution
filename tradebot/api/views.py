@@ -82,6 +82,14 @@ class InMemoryPortfolioView:
     trades_by_wallet: dict[str, list[dict]] = field(default_factory=dict)
     open_orders_by_wallet: dict[str, list[dict]] = field(default_factory=dict)
     strategy_descriptions: dict[str, str] = field(default_factory=dict)
+    # Live-loop heartbeat published by application.live_loop (empty when the
+    # server runs a static replay / synthetic market).
+    live_status: dict = field(default_factory=dict)
+    # Hourly market-awareness panel (application.awareness.status_block()).
+    awareness: dict = field(default_factory=dict)
+    # Non-API runtime handles (TickEngine etc.) so main() can wire the live
+    # loop without changing build_view's return shape. Never serialized.
+    runtime: dict = field(default_factory=dict)
 
     # -- system --------------------------------------------------------------
 

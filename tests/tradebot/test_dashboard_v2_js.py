@@ -128,3 +128,15 @@ def test_legacy_v1_dashboard_still_present_but_v2_is_clean():
     if v1.is_file():
         assert "innerHTML" in v1.read_text(encoding="utf-8")  # baseline A14
     assert "innerHTML" not in CODE
+
+
+def test_awareness_and_live_trading_panels_wired():
+    """The dashboard polls the live-loop heartbeat and awareness brief."""
+
+    assert "/system/live" in CODE
+    assert "/system/awareness" in CODE
+    assert "renderTradingStatus" in CODE
+    assert "renderAwareness" in CODE
+    # Truthful degraded states, not silent absence.
+    assert "Static replay" in CODE
+    assert "degraded" in CODE

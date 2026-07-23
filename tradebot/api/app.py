@@ -126,6 +126,16 @@ def _register_routes(app: FastAPI, view: PortfolioView, require_token) -> None:
     def readiness() -> dict:
         return view.readiness()
 
+    @app.get("/api/v2/system/live")
+    def live_status() -> dict:
+        # Empty dict => static replay/synthetic mode (no live loop running).
+        return {"live": view.live_status}
+
+    @app.get("/api/v2/system/awareness")
+    def awareness() -> dict:
+        # Empty dict => awareness service not running (offline/synthetic mode).
+        return {"awareness": view.awareness}
+
     @app.get("/api/v2/portfolio/summary")
     def portfolio_summary() -> dict:
         return view.portfolio_summary()

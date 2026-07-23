@@ -445,12 +445,38 @@ function orderTable(orders, caption) {
 
 const CHARTS_AVAILABLE = () => typeof LightweightCharts !== 'undefined';
 
+// Lightweight-charts renders unix timestamps in UTC by default, which reads as
+// "stale by a few hours" to anyone not on UTC. These formatters re-render axis
+// ticks and the crosshair label in the BROWSER's local timezone; the underlying
+// data stays in unix seconds, so overlays and markers still line up.
+const pad2 = (n) => String(n).padStart(2, '0');
+
+function localTickLabel(time, tickMarkType) {
+  const d = new Date(time * 1000);
+  switch (tickMarkType) {
+    case 0: return String(d.getFullYear());                      // Year
+    case 1: return d.toLocaleString(undefined, { month: 'short' });  // Month
+    case 2: return String(d.getDate());                          // Day
+    case 4: return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    default: return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;  // Time
+  }
+}
+
+function localCrosshairLabel(time) {
+  const d = new Date(time * 1000);
+  return `${d.getDate()} ${d.toLocaleString(undefined, { month: 'short' })} '` +
+         `${String(d.getFullYear()).slice(-2)}  ` +
+         `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
 const CHART_THEME = {
   layout: { background: { color: 'transparent' }, textColor: '#9aa4b6' },
   grid: { vertLines: { color: 'rgba(255,255,255,0.04)' },
           horzLines: { color: 'rgba(255,255,255,0.04)' } },
   rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
-  timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true },
+  timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true,
+               tickMarkFormatter: localTickLabel },
+  localization: { timeFormatter: localCrosshairLabel },
 };
 
 const UP = '#26a69a';
@@ -905,6 +931,82 @@ function renderInsights(root, data) {
   }
 }
 
+/* ------------------------------------------------- awareness + live status */
+
+/** Header strip: is the trading loop alive, caught up, and filling? */
+function renderTradingStatus(root, live) {
+  if (!root) return;
+  clear(root);
+  if (!live || !live.mode) {
+    root.appendChild(el('span', { className: 'trading-chip trading-chip--off',
+                                  text: 'Static replay — no live trading' }));
+    return;
+  }
+  const lastTick = live.last_tick_ms
+    ? new Date(live.last_tick_ms).toLocaleTimeString() : '--';
+  const caught = live.caught_up;
+  root.appendChild(el('span', {
+    className: `trading-chip ${caught ? 'trading-chip--ok' : 'trading-chip--warn'}`,
+    text: caught ? 'Trading live' : 'Catching up…',
+  }));
+  root.appendChild(el('span', { className: 'trading-meta',
+                                text: `last candle ${lastTick}` }));
+  root.appendChild(el('span', { className: 'trading-meta',
+                                text: `${live.total_fills ?? 0} lifetime fills` }));
+}
+
+function stanceLabel(stance) {
+  if (stance >= 0.5) return 'strongly bullish';
+  if (stance >= 0.1) return 'bullish';
+  if (stance <= -0.5) return 'strongly bearish';
+  if (stance <= -0.1) return 'bearish';
+  return 'neutral';
+}
+
+/** Hourly market-awareness brief: summary + one chip per committee domain. */
+function renderAwareness(root, aw) {
+  clear(root);
+  if (!aw || !aw.status || aw.status === 'never_run') {
+    root.appendChild(stateNode('stale',
+      'Awareness not available — committee runs on candle-derived evidence only.'));
+    return;
+  }
+  const head = el('div', { className: 'awareness-head' });
+  const degraded = aw.status !== 'ok';
+  head.appendChild(el('span', {
+    className: `awareness-badge ${degraded ? 'awareness-badge--warn' : 'awareness-badge--ok'}`,
+    text: degraded ? `degraded (${aw.status})` : 'fresh',
+  }));
+  if (aw.brief_at) {
+    head.appendChild(el('span', { className: 'awareness-meta',
+      text: `brief ${aw.age_hours != null ? aw.age_hours + 'h old' : ''} · model ${aw.model_id || 'n/a'}` }));
+  }
+  root.appendChild(head);
+  if (aw.summary) {
+    root.appendChild(el('p', { className: 'awareness-summary', text: aw.summary }));
+  }
+  const grid = el('div', { className: 'awareness-grid' });
+  for (const d of aw.domains || []) {
+    const tone = d.stance >= 0.1 ? 'up' : (d.stance <= -0.1 ? 'down' : 'flat');
+    grid.appendChild(el('div', {
+      className: `awareness-card awareness-card--${tone}`,
+      children: [
+        el('div', { className: 'awareness-domain', text: d.domain.replace(/_/g, ' ') }),
+        el('div', { className: 'awareness-stance',
+                    text: `${stanceLabel(d.stance)} (${d.stance > 0 ? '+' : ''}${d.stance})` }),
+        el('div', { className: 'awareness-conf', text: `confidence ${Math.round(d.confidence * 100)}%` }),
+        el('div', { className: 'awareness-rationale', text: d.rationale }),
+        el('div', { className: 'awareness-sources', text: (d.sources || []).join(', ') }),
+      ],
+    }));
+  }
+  root.appendChild(grid);
+  if (aw.source_errors && aw.source_errors.length) {
+    root.appendChild(el('p', { className: 'awareness-errors',
+      text: `unavailable inputs: ${aw.source_errors.join('; ')}` }));
+  }
+}
+
 /* -------------------------------------------------------------- controller */
 
 function setLiveStatus(root, kind, message) {
@@ -936,6 +1038,21 @@ async function refresh(state) {
     try {
       renderInsights(insightsRoot, await getJson('/portfolio/insights'));
     } catch { ok = false; clear(insightsRoot); insightsRoot.appendChild(errorNode('Could not load insights.')); }
+  }
+
+  // Live-loop heartbeat + hourly awareness brief: optional panels — absence
+  // (older server, synthetic mode) degrades to informative placeholders.
+  const tradingRoot = document.getElementById('trading-status');
+  if (tradingRoot) {
+    try {
+      renderTradingStatus(tradingRoot, (await getJson('/system/live')).live);
+    } catch { clear(tradingRoot); }
+  }
+  const awarenessRoot = document.getElementById('awareness');
+  if (awarenessRoot) {
+    try {
+      renderAwareness(awarenessRoot, (await getJson('/system/awareness')).awareness);
+    } catch { clear(awarenessRoot); awarenessRoot.appendChild(errorNode('Could not load awareness.')); }
   }
 
   try {

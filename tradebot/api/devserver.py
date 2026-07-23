@@ -1,13 +1,13 @@
-"""Local development server for manual dashboard/API testing.
+"""Evolution server: live paper trading + dashboard/API.
 
-Seeds an in-memory 26-wallet portfolio (12 active + 12 shadow + Dark Horse +
-Darkhorse - Daily), replays a deterministic synthetic market through the real
-ExecutionService so the wallets hold genuine balances, then serves the API +
-dashboard. The two permanent wallets trade through the REAL five-domain
-committee (`tradebot.application.dark_horse.synthesize`); the technical and
-liquidity domains are derived from the actual candle window, while the
-macro/fundamental/onchain feeds do not exist in the dev harness and carry
-clearly-labelled synthetic placeholder evidence instead.
+Seeds a 26-wallet portfolio (12 active + 12 shadow + Dark Horse + Darkhorse -
+Daily), replays the backfilled market through the real ExecutionService so the
+wallets hold genuine balances, then serves the API + dashboard. The two
+permanent wallets trade through the REAL five-domain committee
+(`tradebot.application.dark_horse.synthesize`); technical and liquidity are
+derived from the candle window, while macro/fundamental/onchain come from the
+hourly awareness service (external stats + news + local-LLM brief) when fresh,
+degrading honestly to labelled candle-drift placeholders.
 
 Market data is either:
 
@@ -16,15 +16,12 @@ Market data is either:
   paper platform was audit finding A10. Real exchange filters (tick/lot/notional)
   are fetched too, and the in-progress candle is excluded. If live data cannot be
   obtained the server **fails loudly** rather than silently serving fake prices.
-* default — a seeded synthetic walk, touching no network.
+  After the startup replay a LiveLoop keeps trading every newly CLOSED candle
+  (missed bars are gap-replayed through the same TickEngine), and wallet state
+  is snapshotted to ``--state`` so restarts resume instead of resetting.
+* default — a seeded synthetic walk, touching no network; static replay only.
 
-This is a DEV harness, not a production entrypoint:
-
-* state is in-memory and vanishes on exit — no runtime database is created or
-  modified;
-* it binds loopback only;
-* it backfills history once at startup and then re-marks equity every 15s from
-  the newest closed candle; it does not re-run strategy decisions on new bars.
+Paper trading only — no real orders are ever placed. Binds loopback only.
 
 Run:  python -m tradebot.api.devserver --port 5555 --live
 """
@@ -38,40 +35,32 @@ import threading
 import time
 from decimal import Decimal
 
-from dataclasses import dataclass
-
-from ..application.dark_horse import (
-    DEFAULT_CADENCE_SECONDS,
-    DomainSignal,
-    synthesize,
-)
-from ..application.execution import (
-    ExecutionModel,
-    ExecutionService,
-    OrderIntent,
-    OrderType,
-)
-from ..application.order_book import RestingBook, RestingOrder
-from ..application.portfolio import WalletSlot, seed_portfolio
-from ..domain.dark_horse import (
-    LIQUIDITY,
-    REQUIRED_DOMAINS,
-    TECHNICAL,
-    DarkHorseAction,
-    DomainReport,
-    DomainStatus,
-    EvidenceItem,
+from ..application.dark_horse import DEFAULT_CADENCE_SECONDS
+from ..application.execution import ExecutionModel, ExecutionService
+from ..application.portfolio import seed_portfolio
+from ..application.order_book import RestingBook
+from ..application.tick_engine import (
+    FIVE_MIN_MS,
+    PermanentRunner,
+    TickEngine,
+    apply_daily_params,
+    committee_evidence,
+    permanent_committee_intent,
 )
 from ..domain.dark_horse_daily import default_params
-from ..domain.ledger import Side
 from ..domain.market import MarketSnapshot
-from ..domain.money import base as base_qty
-from ..domain.money import quote
-from ..domain.strategies import StrategyContext, WalletView
 from ..strategies.builtin import BUILTIN_STRATEGIES
 from .app import create_app
 from .security import ApiSettings
-from .views import InMemoryPortfolioView, money
+from .views import InMemoryPortfolioView
+
+# Backwards-compatible aliases: these lived here before the tick engine was
+# extracted to application/tick_engine.py; tests and older callers import them
+# under the underscore names.
+_committee_evidence = committee_evidence
+_permanent_committee_intent = permanent_committee_intent
+_PermanentRunner = PermanentRunner
+_apply_daily_params = apply_daily_params
 
 # nosec B105 - not a credential: a fixed, published, loopback-only dev token so
 # the operator can exercise the guarded mutation routes. Real deployments read
@@ -80,7 +69,6 @@ from .views import InMemoryPortfolioView, money
 DEV_TOKEN = "dev-local-token-not-a-secret-0123456789"  # nosec B105
 N_CANDLES = 400
 WINDOW = 150
-FIVE_MIN_MS = 300_000  # 5-minute candle spacing, in milliseconds
 
 
 def _candle(i: int, close: float, hi: float, lo: float, vol: float,
@@ -157,80 +145,6 @@ class MarketDataUnavailable(RuntimeError):
     pass
 
 
-# ---- per-wallet trade recording (drill-down data) --------------------------
-
-
-def _iso(ms: int) -> str:
-    return (dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc)
-            .replace(tzinfo=None).isoformat() + "Z")
-
-
-def _realized_from_txn(txn) -> Decimal:
-    """Realized P&L booked by a fill (0 for buys). The sell posts a
-    ``realized_pnl`` leg equal to ``-realized`` (credit convention)."""
-
-    return -sum((p.amount for p in txn.postings if p.account == "realized_pnl"),
-                start=Decimal("0"))
-
-
-def _trade_record(snapshot: MarketSnapshot, intent: OrderIntent,
-                  result, placed_ms: int | None = None) -> dict:
-    """One row of a wallet's order history: what was asked, what happened.
-
-    ``placed_ms`` is the open time of the candle the order was PLACED on — it
-    differs from the fill candle for a resting limit order. When omitted the
-    order was placed and resolved on the same candle (a market order).
-    """
-
-    ts = _iso(snapshot.close_time_ms)
-    placed_at = _iso(placed_ms + FIVE_MIN_MS) if placed_ms is not None else ts
-    filled = result.accepted
-    txn = result.transaction
-    price = result.fill_price
-    filled_qty = txn.qty if txn is not None else Decimal("0")
-    notional = (quote(price * filled_qty)
-                if (price is not None and filled) else None)
-    return {
-        "order_id": intent.intent_id,
-        "placed_at": placed_at,
-        "filled_at": ts if filled else None,
-        "side": intent.side.value,
-        "order_type": intent.order_type.value,
-        "requested_qty": money(intent.quantity),
-        "filled_qty": money(filled_qty),
-        "price": money(price) if price is not None else None,
-        "notional": money(notional) if notional is not None else None,
-        "fee": money(txn.fee) if txn is not None else None,
-        "status": "filled" if filled else "rejected",
-        "reason": (result.reason.value if result.reason is not None
-                   else intent.reason_code),
-        "strategy_version_id": intent.strategy_version_id,
-        "realized_pnl": (money(_realized_from_txn(txn))
-                         if txn is not None else None),
-    }
-
-
-def _expired_record(snapshot: MarketSnapshot, order) -> dict:
-    """History row for a resting limit order that timed out unfilled."""
-
-    return {
-        "order_id": order.order_id,
-        "placed_at": _iso(order.placed_open_ms + FIVE_MIN_MS),
-        "filled_at": None,
-        "side": order.side.value,
-        "order_type": "LIMIT",
-        "requested_qty": money(order.quantity),
-        "filled_qty": "0.00000000",
-        "price": money(order.limit_price),
-        "notional": None,
-        "fee": None,
-        "status": "expired",
-        "reason": order.reason_code,
-        "strategy_version_id": order.strategy_version_id,
-        "realized_pnl": None,
-    }
-
-
 def _strategy_description(strategy_obj) -> str:
     """A short human blurb from the strategy module's docstring."""
 
@@ -257,138 +171,8 @@ _PERMANENT_DESCRIPTIONS = {
 }
 
 
-# ---- permanent-wallet committee (Dark Horse + Darkhorse - Daily) -----------
-
-_FLAT_EPSILON = Decimal("0.001")  # <0.1% drift = no directional call
-
-
-def _committee_evidence(
-    window: tuple[MarketSnapshot, ...],
-) -> tuple[dict[str, DomainReport], dict[str, DomainSignal], dt.datetime]:
-    """Five-domain evidence for the dev harness.
-
-    ``technical`` and ``liquidity_derivatives`` are genuinely derived from the
-    candle window (short-horizon drift). The macro/fundamental/onchain feeds do
-    not exist in the dev harness, so those domains carry synthetic placeholder
-    evidence following the long-window drift, with ``source_id`` labelling them
-    as such — the REAL committee logic is exercised, but nothing pretends the
-    dev harness has production data feeds.
-    """
-
-    last = window[-1]
-    now = dt.datetime.fromtimestamp(last.close_time_ms / 1000,
-                                    dt.timezone.utc).replace(tzinfo=None)
-    closes = [c.close for c in window]
-
-    def drift(n: int) -> Decimal:
-        seg = closes[-min(n, len(closes)):]
-        return (seg[-1] - seg[0]) / seg[0]
-
-    # Each domain reads its own horizon so the evidence is not one number
-    # repeated five times: technical/liquidity are short-horizon reads of the
-    # real candles; the placeholder domains follow progressively longer drifts.
-    horizons = {TECHNICAL: 24, LIQUIDITY: 36}
-    placeholder_horizons = {"macro": 288, "bitcoin_fundamental": 144,
-                            "onchain": 72}
-    market_derived = {d: drift(n) for d, n in horizons.items()}
-    moves = {d: market_derived.get(d,
-                                   drift(placeholder_horizons.get(d, len(closes))))
-             for d in REQUIRED_DOMAINS}
-
-    reports: dict[str, DomainReport] = {}
-    signals: dict[str, DomainSignal] = {}
-    for domain, move in moves.items():
-        confidence = min(Decimal("0.85"),
-                         Decimal("0.50") + min(abs(move) * 25, Decimal("0.35")))
-        derived = domain in market_derived
-        reports[domain] = DomainReport(domain, DomainStatus.OK, (EvidenceItem(
-            source_id="dev-market" if derived else "dev-harness-demo",
-            metric=f"{domain}_drift",
-            value=f"{move:.6f}",
-            interpretation=("candle-window drift" if derived
-                            else "synthetic dev placeholder"),
-            confidence=confidence,
-            source_time=now,
-            retrieved_at=now,
-            data_snapshot_id=last.snapshot_id,
-        ),))
-        bullish = None if abs(move) < _FLAT_EPSILON else move > 0
-        signals[domain] = DomainSignal(domain, bullish, confidence)
-    return reports, signals, now
-
-
-@dataclass
-class _PermanentRunner:
-    """Cadenced committee loop for one permanent wallet.
-
-    ``entry_limit_bps`` / ``exit_limit_bps`` place accumulate/reduce as RESTING
-    limit orders off the mark (0 = market). For Darkhorse - Daily these are read
-    from its live params dict and re-tuned by the daily LLM adaptation loop; for
-    Dark Horse they are fixed.
-    """
-
-    slot: WalletSlot
-    cadence_seconds: int
-    accumulate_fraction: Decimal
-    reduce_fraction: Decimal
-    entry_limit_bps: Decimal = Decimal("0")
-    exit_limit_bps: Decimal = Decimal("0")
-    last_eval_ms: int | None = None
-
-
-def _permanent_committee_intent(
-    runner: _PermanentRunner,
-    snapshot: MarketSnapshot,
-    window: tuple[MarketSnapshot, ...],
-) -> tuple[Side, Decimal, str, Decimal | None] | None:
-    """Evaluate the committee on cadence; map the decision to a spot order.
-
-    Returns ``(side, quantity, reason, limit_price)`` — ``limit_price`` is
-    ``None`` for a market order. Accumulate rests a bid below the mark and
-    reduce rests an ask above it (both tunable); exit-to-cash is always a market
-    order because a risk-off exit must not sit unfilled on the book.
-    """
-
-    if (runner.last_eval_ms is not None
-            and snapshot.close_time_ms - runner.last_eval_ms
-            < runner.cadence_seconds * 1000):
-        return None
-    runner.last_eval_ms = snapshot.close_time_ms
-
-    wallet = runner.slot.wallet
-    reports, signals, now = _committee_evidence(window)
-    decision = synthesize(
-        reports, signals, now=now,
-        strategy_version_id=runner.slot.strategy_version_id,
-        holds_btc=wallet.base_qty > 0,
-    )
-    px = snapshot.mark_price
-    limit_price: Decimal | None = None
-    if decision.action is DarkHorseAction.ACCUMULATE:
-        budget = quote(wallet.quote_cash * runner.accumulate_fraction)
-        if budget < Decimal("10"):
-            return None
-        if runner.entry_limit_bps > 0:
-            limit_price = quote(px * (Decimal(1) - runner.entry_limit_bps / Decimal(10_000)))
-        qty = base_qty(budget / (limit_price or px))
-        side = Side.BUY
-    elif decision.action is DarkHorseAction.REDUCE:
-        qty = base_qty(wallet.base_qty * runner.reduce_fraction)
-        if runner.exit_limit_bps > 0:
-            limit_price = quote(px * (Decimal(1) + runner.exit_limit_bps / Decimal(10_000)))
-        side = Side.SELL
-    elif decision.action is DarkHorseAction.EXIT_TO_CASH:
-        qty = base_qty(wallet.base_qty)
-        side = Side.SELL  # urgent risk-off -> market (limit_price stays None)
-    else:
-        return None
-    if qty <= 0:
-        return None
-    return side, qty, decision.action.value, limit_price
-
-
 def _permanent_runners(portfolio,
-                       daily_params: dict | None = None) -> list[_PermanentRunner]:
+                       daily_params: dict | None = None) -> list[PermanentRunner]:
     """Dark Horse on its 4h cadence; Darkhorse - Daily on its tuned cadence.
 
     ``daily_params`` overrides Darkhorse - Daily's tunables (fractions, cadence,
@@ -423,7 +207,8 @@ def _permanent_runners(portfolio,
 
 def build_view(now: dt.datetime, live: bool = False,
                interval: str = "5m",
-               llm_adapt: bool = False) -> InMemoryPortfolioView:
+               llm_adapt: bool = False,
+               restore_state: dict | None = None) -> InMemoryPortfolioView:
     filters = None
     market_note = "synthetic seeded walk (no network)"
     market_status = "synthetic"
@@ -432,12 +217,12 @@ def build_view(now: dt.datetime, live: bool = False,
         try:
             market, filters, market_note = build_live_market(interval=interval)
             market_status = "ok"
-            print(f"[devserver] LIVE market data: {market_note}")
-            print(f"[devserver] real exchange filters: tick={filters.tick_size} "
+            print(f"[evolution] LIVE market data: {market_note}")
+            print(f"[evolution] real exchange filters: tick={filters.tick_size} "
                   f"step={filters.step_size} minNotional={filters.min_notional}")
         except Exception as exc:
             # Be loud and honest rather than silently serving fake prices.
-            print(f"[devserver] LIVE market data FAILED ({type(exc).__name__}: "
+            print(f"[evolution] LIVE market data FAILED ({type(exc).__name__}: "
                   f"{exc}) -> refusing to fall back silently")
             raise
     else:
@@ -464,131 +249,45 @@ def build_view(now: dt.datetime, live: bool = False,
     execution = (ExecutionService(model=ExecutionModel(filters=filters))
                  if filters else ExecutionService())
     book = RestingBook()
-    _perm_slots = [p for p in (portfolio.dark_horse, portfolio.dark_horse_daily)
-                   if p is not None]
-    all_slots = portfolio.active + portfolio.shadow + _perm_slots
-    wallet_by_id = {s.wallet.wallet_id: s.wallet for s in all_slots}
-    version_by_id = {s.wallet.wallet_id: s.strategy_version_id for s in all_slots}
 
     # Opt-in: the daily LLM re-tune loop. None => no adaptation (current
     # behaviour, and the graceful fallback when the local model is down).
     retuner = _build_retuner(portfolio) if llm_adapt else None
-    current_day: str | None = None
-    day_fills: dict[str, list[dict]] = {}
 
-    trades: dict[str, list[dict]] = {}
-    fills = 0
-    seq = 0
-    prev = None
+    engine = TickEngine(runners=runners, permanents=permanents,
+                        execution=execution, book=book, retuner=retuner)
     n = len(market)
-    for tick in range(1, n + 1):
-        snapshot = market[tick - 1]
-        window = market[max(0, tick - WINDOW):tick]
+    restored = False
+    if restore_state is not None:
+        try:
+            engine.restore_state(restore_state)
+            restored = True
+            print(f"[evolution] state RESTORED: {engine.fills} lifetime fills, "
+                  f"watermark {engine.last_processed_open_ms} — the live loop "
+                  f"will gap-replay up to now")
+        except Exception as exc:
+            print(f"[evolution] state restore REJECTED "
+                  f"({type(exc).__name__}: {exc}) -> fresh backfill replay")
+    if not restored:
+        for tick in range(1, n + 1):
+            engine.process(market[tick - 1], market[max(0, tick - WINDOW):tick])
+    trades = engine.trades
+    fills = engine.fills
 
-        # Day boundary: close out the completed day's lessons, adapt Darkhorse -
-        # Daily, and apply the new params before this day's candles replay.
-        day = _iso(snapshot.close_time_ms)[:10]
-        if retuner is not None and day != current_day:
-            if current_day is not None and prev is not None:
-                new_params = retuner.end_day(current_day, wallet_by_id,
-                                             prev.mark_price, version_by_id,
-                                             day_fills)
-                _apply_daily_params(permanents, new_params)
-            retuner.begin_day(wallet_by_id, snapshot.mark_price)
-            day_fills = {}
-            current_day = day
-
-        book.observe_spacing(snapshot, prev)
-        prev = snapshot
-        batch: list[tuple] = []
-        placed_ms_by_id: dict[str, int] = {}
-
-        # (1) Expire resting orders that have sat unfilled past their TTL.
-        for order in book.expire(snapshot):
-            trades.setdefault(order.wallet_id, []).append(
-                _expired_record(snapshot, order))
-        # (2) Resting orders the candle traded through become fills this tick.
-        for order in book.due_fills(snapshot):
-            seq += 1
-            iid = f"dev-i{seq}"
-            placed_ms_by_id[iid] = order.placed_open_ms
-            batch.append((wallet_by_id[order.wallet_id], OrderIntent(
-                intent_id=iid, wallet_id=order.wallet_id,
-                strategy_version_id=order.strategy_version_id,
-                side=order.side, order_type=OrderType.LIMIT,
-                quantity=order.quantity, limit_price=order.limit_price,
-                reason_code=order.reason_code,
-            )))
-
-        def place(wallet, version_id, side, order_type, qty, limit_price, reason):
-            """Market -> execute this tick; not-yet-marketable limit -> rest."""
-            nonlocal seq
-            seq += 1
-            iid = f"dev-i{seq}"
-            if order_type is OrderType.LIMIT and limit_price is not None:
-                # A limit placed at this close cannot fill on its own candle (the
-                # high/low already happened) — it rests and is checked next tick.
-                book.rest(RestingOrder(
-                    order_id=iid, wallet_id=wallet.wallet_id,
-                    strategy_version_id=version_id, side=side,
-                    limit_price=limit_price, quantity=qty, reason_code=reason,
-                    placed_open_ms=snapshot.open_time_ms))
-            else:
-                batch.append((wallet, OrderIntent(
-                    intent_id=iid, wallet_id=wallet.wallet_id,
-                    strategy_version_id=version_id, side=side,
-                    order_type=order_type, quantity=qty, limit_price=limit_price,
-                    reason_code=reason)))
-
-        # (3) Strategy wallets.
-        for idx, (slot, strategy, state) in enumerate(runners):
-            w = slot.wallet
-            ctx = StrategyContext(
-                snapshot=snapshot,
-                wallet=WalletView(w.quote_cash, w.base_qty, w.avg_cost),
-                candles=window,
-            )
-            decision = strategy.on_market_snapshot(ctx, state)
-            runners[idx] = (slot, strategy, decision.state)
-            for spec in decision.intents:
-                place(w, slot.strategy_version_id, spec.side,
-                      OrderType(spec.order_type), spec.quantity,
-                      spec.limit_price, spec.reason_code)
-
-        # (4) Permanent wallets: the real five-domain committee on their cadences.
-        for pr in permanents:
-            order = _permanent_committee_intent(pr, snapshot, window)
-            if order is None:
-                continue
-            side, qty, reason, limit_price = order
-            place(pr.slot.wallet, pr.slot.strategy_version_id, side,
-                  OrderType.LIMIT if limit_price is not None else OrderType.MARKET,
-                  qty, limit_price, f"committee_{reason}")
-
-        # (5) Execute everything submitted this tick.
-        intents_by_id = {intent.intent_id: intent for _, intent in batch}
-        for result in execution.process_tick(snapshot, batch):
-            fills += result.accepted
-            intent = intents_by_id[result.intent_id]
-            record = _trade_record(snapshot, intent, result,
-                                   placed_ms=placed_ms_by_id.get(result.intent_id))
-            trades.setdefault(result.wallet_id, []).append(record)
-            if retuner is not None and result.accepted:
-                day_fills.setdefault(result.wallet_id, []).append(record)
-
-    if retuner is not None:
+    if retuner is not None and not restored:
         _print_adaptation_summary(retuner)
     open_orders = book.snapshot_open()
     mark = market[-1].mark_price
     resting = sum(len(v) for v in open_orders.values())
-    print(f"[devserver] replayed {n} candles across "
+    print(f"[evolution] {'restored' if restored else f'replayed {n} candles'} "
+          f"across "
           f"{len(portfolio.active) + len(portfolio.shadow) + len(permanents)} "
           f"wallets -> {fills} fills, {resting} orders still resting")
-    print(f"[devserver] mark price {mark}  active equity "
+    print(f"[evolution] mark price {mark}  active equity "
           f"{portfolio.active_equity(mark)}  shadow {portfolio.shadow_equity(mark)}")
     for pr in permanents:
         w = pr.slot.wallet
-        print(f"[devserver] {pr.slot.strategy_name}: equity {w.equity(mark)}  "
+        print(f"[evolution] {pr.slot.strategy_name}: equity {w.equity(mark)}  "
               f"btc {w.base_qty}  usdt {w.quote_cash}")
 
     llm_healthy, llm_model = probe_local_llm()
@@ -597,7 +296,7 @@ def build_view(now: dt.datetime, live: bool = False,
                     for c in BUILTIN_STRATEGIES}
     descriptions.update(_PERMANENT_DESCRIPTIONS)
 
-    return InMemoryPortfolioView(
+    view = InMemoryPortfolioView(
         portfolio=portfolio, mark_price=mark, now=now,
         candles=tuple(market),
         archived_lifetime_pnl=Decimal("0.00"),
@@ -613,16 +312,42 @@ def build_view(now: dt.datetime, live: bool = False,
              "note": f"local model: {llm_model}"},
         ],
     )
+    # Runtime handles for main(): the live loop keeps trading through the SAME
+    # engine the replay just warmed up.
+    view.runtime = {"engine": engine, "market": market, "interval": interval}
+    return view
+
+
+#: How many candles the view retains for charting. At least the ~1000-bar live
+#: startup backfill, so appending new bars never shrinks the visible history.
+CANDLE_RETENTION = 1000
+
+
+def merge_closed_candles(existing: tuple[MarketSnapshot, ...],
+                         closed: tuple[MarketSnapshot, ...],
+                         retention: int = CANDLE_RETENTION,
+                         ) -> tuple[MarketSnapshot, ...]:
+    """Append candles newer than the last retained bar, capped to ``retention``.
+
+    Pure so the refresher loop's only untested part is the fetch/sleep plumbing.
+    """
+
+    last_open = existing[-1].open_time_ms if existing else -1
+    fresh = tuple(c for c in closed if c.open_time_ms > last_open)
+    return (existing + fresh)[-retention:] if fresh else existing
 
 
 def start_market_refresher(view: InMemoryPortfolioView, interval: str = "5m",
                            period_seconds: float = 15.0) -> threading.Thread:
-    """Keep the mark price current from live Binance data.
+    """Keep the mark price AND the candle window current from live Binance data.
 
     Without this the mark is frozen at whatever the startup backfill saw, so the
     dashboard would show live-sourced but stale prices. Re-marks every wallet's
     equity against the newest CLOSED candle (the in-progress bar is still never
-    used for marking, matching the evaluation rules).
+    used for marking, matching the evaluation rules), and appends newly closed
+    candles to ``view.candles`` so the chart keeps advancing instead of ending
+    at the startup snapshot. Strategy decisions are still NOT re-run on new
+    bars — this only keeps the read model fresh.
 
     Failures leave the last good mark in place and flag the source as degraded —
     we never invent a price.
@@ -633,11 +358,17 @@ def start_market_refresher(view: InMemoryPortfolioView, interval: str = "5m",
     def _loop() -> None:
         while True:
             try:
-                closed = closed_only(fetch_klines(interval=interval, limit=2))
+                # limit=5 gives headroom to bridge a few missed periods (e.g. a
+                # laptop sleep shorter than 5 bars); longer gaps simply resume
+                # from the newest bars, leaving a visible gap in the chart.
+                closed = closed_only(fetch_klines(interval=interval, limit=5))
                 if closed:
                     newest = closed[-1]
                     view.mark_price = newest.close
                     view.now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+                    # Single tuple assignment: atomic under the GIL, so
+                    # request threads never see a half-updated window.
+                    view.candles = merge_closed_candles(view.candles, closed)
                     _set_source(view, "binance_public", "ok",
                                 f"live {interval}; marked at closed candle "
                                 f"{newest.close_time_ms}")
@@ -700,22 +431,10 @@ def probe_local_llm() -> tuple[bool, str]:
 
     client, model_id = _build_llm_client()
     if client is None:
-        print("[devserver] local model unreachable -> degraded")
+        print("[evolution] local model unreachable -> degraded")
         return False, "unavailable"
-    print(f"[devserver] local model OK: served id '{model_id}'")
+    print(f"[evolution] local model OK: served id '{model_id}'")
     return True, model_id
-
-
-def _apply_daily_params(permanents, params: dict) -> None:
-    """Push freshly-adapted tunables onto the live Darkhorse - Daily runner."""
-
-    for pr in permanents:
-        if pr.slot.kind == "dark_horse_daily":
-            pr.accumulate_fraction = params["accumulate_fraction"]
-            pr.reduce_fraction = params["reduce_fraction"]
-            pr.cadence_seconds = int(params["signal_cadence_hours"] * 3600)
-            pr.entry_limit_bps = params["entry_limit_bps"]
-            pr.exit_limit_bps = params["exit_limit_bps"]
 
 
 def _build_retuner(portfolio):
@@ -727,10 +446,10 @@ def _build_retuner(portfolio):
         return None
     client, model_id = _build_llm_client()
     if client is None:
-        print("[devserver] --llm-adapt requested but local model is down "
+        print("[evolution] --llm-adapt requested but local model is down "
               "-> daily wallet runs on default params (no adaptation)")
         return None
-    print(f"[devserver] --llm-adapt ON: Darkhorse - Daily re-tunes each "
+    print(f"[evolution] --llm-adapt ON: Darkhorse - Daily re-tunes each "
           f"simulated day via '{model_id}'")
     slot = portfolio.dark_horse_daily
     return DailyReTuner(
@@ -742,16 +461,57 @@ def _build_retuner(portfolio):
     )
 
 
+def _build_awareness():
+    """Assemble the hourly awareness service over the guarded broker + LLM.
+
+    Always returns a service: with the local model down every refresh records
+    an honest degraded status and the committee keeps its labelled candle-drift
+    placeholders — trading never depends on awareness being up.
+    """
+
+    import httpx
+
+    from ..application.awareness import AwarenessService
+    from ..infrastructure.awareness.brief import synthesize_brief
+    from ..infrastructure.awareness.sources import gather_inputs
+    from ..infrastructure.data_broker.client import DataBroker, RawResponse
+
+    class _HttpxBrokerTransport:
+        def request(self, method: str, url: str, headers: dict) -> RawResponse:
+            r = httpx.request(method, url, headers=headers, timeout=15.0,
+                              follow_redirects=False)
+            return RawResponse(
+                status=r.status_code,
+                headers={k.title(): v for k, v in r.headers.items()},
+                body=r.content,
+                location=r.headers.get("location"),
+            )
+
+    broker = DataBroker(transport=_HttpxBrokerTransport())
+
+    def _synthesize(inputs):
+        client, _model = _build_llm_client()
+        if client is None:
+            class _Down:
+                status = "llm_unreachable"
+                model_id = "unavailable"
+            return None, _Down()
+        return synthesize_brief(client, inputs)
+
+    return AwarenessService(gather=lambda: gather_inputs(broker),
+                            synthesize=_synthesize)
+
+
 def _print_adaptation_summary(retuner) -> None:
     changed = [a for a in retuner.history if not a.degraded and a.changed]
-    print(f"[devserver] daily adaptation: {len(retuner.history)} cycles, "
+    print(f"[evolution] daily adaptation: {len(retuner.history)} cycles, "
           f"{len(changed)} changed the strategy")
     for a in changed:
         moves = ", ".join(f"{adj.parameter} {adj.previous_value}->{adj.new_value}"
                           for adj in a.adjustments)
-        print(f"[devserver]   {a.date}: {moves}")
+        print(f"[evolution]   {a.date}: {moves}")
     daily = retuner.params
-    print(f"[devserver] final daily limits: entry_bps={daily['entry_limit_bps']} "
+    print(f"[evolution] final daily limits: entry_bps={daily['entry_limit_bps']} "
           f"exit_bps={daily['exit_limit_bps']}")
 
 
@@ -779,7 +539,7 @@ def _port_in_use(host: str, port: int) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="tradebot-devserver")
+    parser = argparse.ArgumentParser(prog="evolution-devserver")
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--live", action="store_true",
@@ -791,33 +551,103 @@ def main(argv: list[str] | None = None) -> int:
                              "resting-limit offsets) each simulated day via the "
                              "local model's daily lessons; degrades to no-op if "
                              "the model is down. Off by default (deterministic).")
+    parser.add_argument("--state", default="evolution_state.json",
+                        help="live-mode snapshot file: wallet state survives "
+                             "restarts (missed candles are gap-replayed). "
+                             "Pass an empty string to disable persistence.")
     args = parser.parse_args(argv)
 
     # Fail fast (before the expensive market replay) if the port is taken, so a
     # stale process can't keep serving old code under a "started fine" illusion.
     if _port_in_use(args.host, args.port):
-        print(f"[devserver] ERROR: {args.host}:{args.port} is already in use.")
-        print("[devserver] A stale devserver may still be serving OLD code there.")
-        print("[devserver] Stop that process (or pass a different --port), then retry.")
+        print(f"[evolution] ERROR: {args.host}:{args.port} is already in use.")
+        print("[evolution] A stale devserver may still be serving OLD code there.")
+        print("[evolution] Stop that process (or pass a different --port), then retry.")
         return 1
 
     import uvicorn
 
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+    # Live mode: try to resume from the last snapshot (wrong-version/corrupt/
+    # too-old snapshots are rejected loudly and a fresh replay runs instead).
+    restore_payload = None
+    state_path = args.state if args.live else ""
+    if state_path:
+        from ..infrastructure import state_store
+
+        now_ms = int(now.replace(tzinfo=dt.timezone.utc).timestamp() * 1000)
+        payload, reason = state_store.load(state_path, now_ms=now_ms)
+        if payload is not None:
+            restore_payload = payload["engine"]
+            print(f"[evolution] snapshot found ({state_path}, saved "
+                  f"{payload['saved_at_utc']}) -> resuming")
+        elif reason != "missing":
+            print(f"[evolution] snapshot unusable ({reason}) -> fresh replay")
+
     view = build_view(now, live=args.live, interval=args.interval,
-                      llm_adapt=args.llm_adapt)
+                      llm_adapt=args.llm_adapt, restore_state=restore_payload)
+    loop = None
     if args.live:
-        start_market_refresher(view, interval=args.interval)
-        print(f"[devserver] market refresher running (every 15s, {args.interval} "
-              f"closed candles)")
+        from ..application.live_loop import LiveLoop
+        from ..infrastructure.market_data.binance_public import (
+            closed_only,
+            fetch_klines,
+        )
+
+        market = view.runtime["market"]
+        engine = view.runtime["engine"]
+
+        # Hourly market awareness: real macro/fundamental/onchain evidence for
+        # the permanent-wallet committee, refreshed inside the poll loop.
+        awareness = _build_awareness()
+        engine.evidence_fn = awareness.evidence_fn()
+
+        def _awareness_hook() -> None:
+            if awareness.refresh():  # hourly-gated internally
+                view.awareness = awareness.status_block()
+
+        candle_hooks: tuple = ()
+        if state_path:
+            from ..infrastructure import state_store
+
+            def _save_snapshot(_snapshot=None) -> None:
+                state_store.save(state_path, engine.snapshot_state())
+
+            candle_hooks = (_save_snapshot,)
+
+        loop = LiveLoop(
+            engine=engine, view=view,
+            fetch_closed=lambda limit: closed_only(
+                fetch_klines(interval=args.interval, limit=limit)),
+            seed_window=tuple(market[-WINDOW:]),
+            merge_candles=merge_closed_candles,
+            poll_hooks=(_awareness_hook,),
+            candle_hooks=candle_hooks,
+        )
+        loop.start()
+        print(f"[evolution] LIVE TRADING loop running: strategies re-evaluate "
+              f"every closed {args.interval} candle (poll 15s)")
+        print("[evolution] hourly awareness: coingecko + mempool.space + news "
+              "RSS -> local model brief -> committee evidence")
 
     settings = ApiSettings(host=args.host, port=args.port, auth_token=DEV_TOKEN)
     app = create_app(view, settings)
 
-    print(f"[devserver] dashboard  http://{args.host}:{args.port}/")
-    print(f"[devserver] api        http://{args.host}:{args.port}/api/v2/portfolio/summary")
-    print(f"[devserver] mutation token: {DEV_TOKEN}")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    print(f"[evolution] dashboard  http://{args.host}:{args.port}/")
+    print(f"[evolution] api        http://{args.host}:{args.port}/api/v2/portfolio/summary")
+    print(f"[evolution] mutation token: {DEV_TOKEN}")
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    finally:
+        if loop is not None:
+            loop.stop()
+            if state_path:
+                from ..infrastructure import state_store
+
+                state_store.save(state_path,
+                                 view.runtime["engine"].snapshot_state())
+                print(f"[evolution] final state snapshot -> {state_path}")
     return 0
 
 
